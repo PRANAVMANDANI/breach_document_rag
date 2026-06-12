@@ -35,3 +35,7 @@ db/
 *.ntvs*
 *.njsproj
 *.sln
+
+# Verification & Diagnostic scripts (AI testing files)
+backend/verify.py
+backend/list_models.py
