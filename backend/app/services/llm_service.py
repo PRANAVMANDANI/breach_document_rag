@@ -1,8 +1,7 @@
 import json
 import logging
-import httpx
 from typing import List, Dict, Any, AsyncGenerator
-from groq import AsyncGroq
+from langchain_core.messages import HumanMessage
 from app.config import settings
 
 logger = logging.getLogger("app.llm_service")
@@ -61,7 +60,7 @@ Helpful Answer:"""
 
 async def generate_document_summary(whole_document: str) -> str:
     """
-    Generates a brief high-level summary of the overall document using Groq.
+    Generates a brief high-level summary of the overall document using LangChain ChatGroq.
     This summary is prepended to individual chunks to bypass token-per-minute rate limits.
     """
     if not settings.GROQ_API_KEY:
@@ -79,23 +78,22 @@ Document text:
 Respond with ONLY the 1-2 sentence summary, direct and clear, without any introductory words or formatting."""
 
     try:
-        client = AsyncGroq(api_key=settings.GROQ_API_KEY, max_retries=0)
-        response = await client.chat.completions.create(
+        from langchain_groq import ChatGroq
+        chat = ChatGroq(
+            api_key=settings.GROQ_API_KEY,
             model="llama-3.3-70b-versatile",
-            messages=[
-                {"role": "user", "content": prompt}
-            ],
             temperature=0.1
         )
-        return response.choices[0].message.content.strip()
+        response = await chat.ainvoke([HumanMessage(content=prompt)])
+        return response.content.strip()
     except Exception as e:
-        logger.error(f"Error generating document summary via Groq: {e}")
+        logger.error(f"Error generating document summary via LangChain: {e}")
         return "Document containing technical text."
 
 
 async def generate_chunk_context(document_summary: str, chunk_text: str) -> str:
     """
-    Generates a brief 1-2 sentence context to situate a chunk within the whole document using Groq.
+    Generates a brief 1-2 sentence context to situate a chunk within the overall document using ChatGroq.
     Uses a pre-generated document summary to stay within tokens-per-minute (TPM) rate limits.
     """
     if not settings.GROQ_API_KEY:
@@ -116,17 +114,16 @@ Please give a short context to situate this chunk within the overall document fo
 Response must be very short (1-2 sentences) and direct, without any introductory words (like "Here is the context:") or markdown formatting. Just return the 1-2 sentence context."""
 
     try:
-        client = AsyncGroq(api_key=settings.GROQ_API_KEY, max_retries=0)
-        response = await client.chat.completions.create(
+        from langchain_groq import ChatGroq
+        chat = ChatGroq(
+            api_key=settings.GROQ_API_KEY,
             model="llama-3.3-70b-versatile",
-            messages=[
-                {"role": "user", "content": prompt}
-            ],
             temperature=0.1
         )
-        return response.choices[0].message.content.strip()
+        response = await chat.ainvoke([HumanMessage(content=prompt)])
+        return response.content.strip()
     except Exception as e:
-        logger.error(f"Error generating chunk context via Groq: {e}")
+        logger.error(f"Error generating chunk context via LangChain: {e}")
         # Propagate rate-limit exceptions so that the caller's circuit breaker can trip
         if "429" in str(e) or "quota" in str(e).lower() or "limit" in str(e).lower():
             raise e
@@ -139,7 +136,7 @@ async def generate_response_stream(
     history: List[Dict[str, str]] = None
 ) -> AsyncGenerator[str, None]:
     """
-    Async generator that streams the LLM-generated answer text word-by-word.
+    Async generator that streams the LLM-generated answer text word-by-word via LangChain.
     """
     prompt = build_prompt(query, chunks, history)
 
@@ -148,47 +145,34 @@ async def generate_response_stream(
             raise ValueError("GROQ_API_KEY is not set.")
         
         try:
-            client = AsyncGroq(api_key=settings.GROQ_API_KEY)
-            response = await client.chat.completions.create(
+            from langchain_groq import ChatGroq
+            chat = ChatGroq(
+                api_key=settings.GROQ_API_KEY,
                 model="llama-3.3-70b-versatile",
-                messages=[
-                    {"role": "user", "content": prompt}
-                ],
-                stream=True,
                 temperature=0.1
             )
-            
-            async for chunk in response:
-                content = chunk.choices[0].delta.content
-                if content:
-                    yield content
+            async for chunk in chat.astream([HumanMessage(content=prompt)]):
+                if chunk.content:
+                    yield chunk.content
                     
         except Exception as e:
-            logger.error(f"Groq streaming failed: {e}")
+            logger.error(f"LangChain Groq streaming failed: {e}")
             yield f"\n[Error generating response: {str(e)}]"
             
     elif settings.LLM_PROVIDER == "ollama":
         try:
-            async with httpx.AsyncClient() as client:
-                # Call Ollama API with streaming enabled
-                async with client.stream(
-                    "POST",
-                    f"{settings.OLLAMA_BASE_URL}/api/generate",
-                    json={
-                        "model": settings.OLLAMA_MODEL,
-                        "prompt": prompt,
-                        "stream": True
-                    },
-                    timeout=60.0
-                ) as response:
-                    response.raise_for_status()
-                    async for line in response.aiter_lines():
-                        if line:
-                            data = json.loads(line)
-                            yield data.get("response", "")
+            from langchain_community.chat_models import ChatOllama
+            chat = ChatOllama(
+                base_url=settings.OLLAMA_BASE_URL,
+                model=settings.OLLAMA_MODEL,
+                temperature=0.1
+            )
+            async for chunk in chat.astream([HumanMessage(content=prompt)]):
+                if chunk.content:
+                    yield chunk.content
                             
         except Exception as e:
-            logger.error(f"Ollama streaming failed: {e}")
+            logger.error(f"LangChain Ollama streaming failed: {e}")
             yield f"\n[Error generating response: {str(e)}]"
             
     else:
@@ -197,7 +181,7 @@ async def generate_response_stream(
 
 async def extract_metadata_from_text(first_page_text: str) -> Dict[str, Any]:
     """
-    Uses LLM to extract title and author from the first page text of a document using Groq.
+    Uses LLM to extract title and author from the first page text of a document using ChatGroq.
     """
     if not first_page_text:
         return {}
@@ -217,14 +201,14 @@ Do not include any other text, markdown formatting, or explanation."""
         if settings.LLM_PROVIDER == "groq":
             if not settings.GROQ_API_KEY:
                 return {}
-            client = AsyncGroq(api_key=settings.GROQ_API_KEY)
-            # Use non-streaming completion for metadata extraction
-            response = await client.chat.completions.create(
+            from langchain_groq import ChatGroq
+            chat = ChatGroq(
+                api_key=settings.GROQ_API_KEY,
                 model="llama-3.3-70b-versatile",
-                messages=[{"role": "user", "content": prompt}],
                 temperature=0.1
             )
-            text_res = response.choices[0].message.content.strip()
+            response = await chat.ainvoke([HumanMessage(content=prompt)])
+            text_res = response.content.strip()
             
         if not text_res:
             return {}
@@ -243,5 +227,5 @@ Do not include any other text, markdown formatting, or explanation."""
             "author": data.get("author")
         }
     except Exception as e:
-        logger.error(f"Error extracting metadata via LLM: {e}")
+        logger.error(f"Error extracting metadata via LangChain: {e}")
         return {}
