@@ -6,7 +6,7 @@ The system features a **FastAPI backend** utilizing asynchronous task queues and
 
 ---
 
-## 🚀 Key Technical Highlights (What Interviewers Care About)
+## Key Technical Highlights (What Interviewers Care About)
 
 ### 1. Anthropic-Style Contextual Retrieval
 * **The Problem:** Standard chunking splits documents arbitrarily (e.g., 500-token chunks), causing key semantic context to be lost (e.g., losing track of which company or year a financial chunk refers to).
