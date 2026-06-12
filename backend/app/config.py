@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     LLM_PROVIDER: str = "groq"
     EMBEDDING_PROVIDER: str = "local"
     GROQ_API_KEY: str = ""
+    OPENROUTER_API_KEY: str = ""
+    OPENROUTER_MODEL: str = "openrouter/free"
     GENERATE_SITUATIONAL_CONTEXT: bool = False
     
     # Ollama Settings

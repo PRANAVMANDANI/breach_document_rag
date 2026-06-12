@@ -58,12 +58,54 @@ Helpful Answer:"""
     return prompt
 
 
+def get_llm_client(temperature: float = 0.1):
+    """
+    Helper to resolve the LangChain LLM chat client depending on settings.
+    Supports OpenRouter, Groq, and Ollama.
+    """
+    if settings.LLM_PROVIDER == "openrouter":
+        if not settings.OPENROUTER_API_KEY:
+            raise ValueError("OPENROUTER_API_KEY is not configured in settings.")
+        from langchain_openai import ChatOpenAI
+        return ChatOpenAI(
+            openai_api_key=settings.OPENROUTER_API_KEY,
+            openai_api_base="https://openrouter.ai/api/v1",
+            model_name=settings.OPENROUTER_MODEL or "meta-llama/llama-3-8b-instruct:free",
+            temperature=temperature,
+            default_headers={
+                "HTTP-Referer": "https://github.com/PRANAVMANDANI/rag-pdf-contextual-retrieval",
+                "X-Title": "AskPDF RAG Engine"
+            }
+        )
+    elif settings.LLM_PROVIDER == "groq":
+        if not settings.GROQ_API_KEY:
+            raise ValueError("GROQ_API_KEY is not configured in settings.")
+        from langchain_groq import ChatGroq
+        return ChatGroq(
+            api_key=settings.GROQ_API_KEY,
+            model="llama-3.3-70b-versatile",
+            temperature=temperature
+        )
+    elif settings.LLM_PROVIDER == "ollama":
+        from langchain_community.chat_models import ChatOllama
+        return ChatOllama(
+            base_url=settings.OLLAMA_BASE_URL,
+            model=settings.OLLAMA_MODEL,
+            temperature=temperature
+        )
+    else:
+        raise ValueError(f"Unsupported LLM provider: {settings.LLM_PROVIDER}")
+
+
 async def generate_document_summary(whole_document: str) -> str:
     """
-    Generates a brief high-level summary of the overall document using LangChain ChatGroq.
+    Generates a brief high-level summary of the overall document using the selected provider.
     This summary is prepended to individual chunks to bypass token-per-minute rate limits.
     """
-    if not settings.GROQ_API_KEY:
+    if settings.LLM_PROVIDER == "openrouter" and not settings.OPENROUTER_API_KEY:
+        logger.warning("OPENROUTER_API_KEY is not defined. Skipping summary generation.")
+        return "No document summary available."
+    elif settings.LLM_PROVIDER == "groq" and not settings.GROQ_API_KEY:
         logger.warning("GROQ_API_KEY is not defined. Skipping summary generation.")
         return "No document summary available."
     
@@ -74,16 +116,11 @@ async def generate_document_summary(whole_document: str) -> str:
     
 Document text:
 {truncated_doc}
-
+ 
 Respond with ONLY the 1-2 sentence summary, direct and clear, without any introductory words or formatting."""
 
     try:
-        from langchain_groq import ChatGroq
-        chat = ChatGroq(
-            api_key=settings.GROQ_API_KEY,
-            model="llama-3.3-70b-versatile",
-            temperature=0.1
-        )
+        chat = get_llm_client(temperature=0.1)
         response = await chat.ainvoke([HumanMessage(content=prompt)])
         return response.content.strip()
     except Exception as e:
@@ -93,10 +130,13 @@ Respond with ONLY the 1-2 sentence summary, direct and clear, without any introd
 
 async def generate_chunk_context(document_summary: str, chunk_text: str) -> str:
     """
-    Generates a brief 1-2 sentence context to situate a chunk within the overall document using ChatGroq.
+    Generates a brief 1-2 sentence context to situate a chunk within the overall document.
     Uses a pre-generated document summary to stay within tokens-per-minute (TPM) rate limits.
     """
-    if not settings.GROQ_API_KEY:
+    if settings.LLM_PROVIDER == "openrouter" and not settings.OPENROUTER_API_KEY:
+        logger.warning("OPENROUTER_API_KEY is not defined. Skipping context generation.")
+        return ""
+    elif settings.LLM_PROVIDER == "groq" and not settings.GROQ_API_KEY:
         logger.warning("GROQ_API_KEY is not defined. Skipping context generation.")
         return ""
 
@@ -114,12 +154,7 @@ Please give a short context to situate this chunk within the overall document fo
 Response must be very short (1-2 sentences) and direct, without any introductory words (like "Here is the context:") or markdown formatting. Just return the 1-2 sentence context."""
 
     try:
-        from langchain_groq import ChatGroq
-        chat = ChatGroq(
-            api_key=settings.GROQ_API_KEY,
-            model="llama-3.3-70b-versatile",
-            temperature=0.1
-        )
+        chat = get_llm_client(temperature=0.1)
         response = await chat.ainvoke([HumanMessage(content=prompt)])
         return response.content.strip()
     except Exception as e:
@@ -140,48 +175,19 @@ async def generate_response_stream(
     """
     prompt = build_prompt(query, chunks, history)
 
-    if settings.LLM_PROVIDER == "groq":
-        if not settings.GROQ_API_KEY:
-            raise ValueError("GROQ_API_KEY is not set.")
-        
-        try:
-            from langchain_groq import ChatGroq
-            chat = ChatGroq(
-                api_key=settings.GROQ_API_KEY,
-                model="llama-3.3-70b-versatile",
-                temperature=0.1
-            )
-            async for chunk in chat.astream([HumanMessage(content=prompt)]):
-                if chunk.content:
-                    yield chunk.content
-                    
-        except Exception as e:
-            logger.error(f"LangChain Groq streaming failed: {e}")
-            yield f"\n[Error generating response: {str(e)}]"
-            
-    elif settings.LLM_PROVIDER == "ollama":
-        try:
-            from langchain_community.chat_models import ChatOllama
-            chat = ChatOllama(
-                base_url=settings.OLLAMA_BASE_URL,
-                model=settings.OLLAMA_MODEL,
-                temperature=0.1
-            )
-            async for chunk in chat.astream([HumanMessage(content=prompt)]):
-                if chunk.content:
-                    yield chunk.content
-                            
-        except Exception as e:
-            logger.error(f"LangChain Ollama streaming failed: {e}")
-            yield f"\n[Error generating response: {str(e)}]"
-            
-    else:
-        yield f"\n[Unsupported LLM provider configured: {settings.LLM_PROVIDER}]"
+    try:
+        chat = get_llm_client(temperature=0.1)
+        async for chunk in chat.astream([HumanMessage(content=prompt)]):
+            if chunk.content:
+                yield chunk.content
+    except Exception as e:
+        logger.error(f"LangChain streaming failed: {e}")
+        yield f"\n[Error generating response: {str(e)}]"
 
 
 async def extract_metadata_from_text(first_page_text: str) -> Dict[str, Any]:
     """
-    Uses LLM to extract title and author from the first page text of a document using ChatGroq.
+    Uses LLM to extract title and author from the first page text of a document.
     """
     if not first_page_text:
         return {}
@@ -197,18 +203,14 @@ Example response:
 Do not include any other text, markdown formatting, or explanation."""
 
     try:
-        text_res = ""
-        if settings.LLM_PROVIDER == "groq":
-            if not settings.GROQ_API_KEY:
-                return {}
-            from langchain_groq import ChatGroq
-            chat = ChatGroq(
-                api_key=settings.GROQ_API_KEY,
-                model="llama-3.3-70b-versatile",
-                temperature=0.1
-            )
-            response = await chat.ainvoke([HumanMessage(content=prompt)])
-            text_res = response.content.strip()
+        if settings.LLM_PROVIDER == "openrouter" and not settings.OPENROUTER_API_KEY:
+            return {}
+        elif settings.LLM_PROVIDER == "groq" and not settings.GROQ_API_KEY:
+            return {}
+            
+        chat = get_llm_client(temperature=0.1)
+        response = await chat.ainvoke([HumanMessage(content=prompt)])
+        text_res = response.content.strip()
             
         if not text_res:
             return {}
@@ -229,3 +231,4 @@ Do not include any other text, markdown formatting, or explanation."""
     except Exception as e:
         logger.error(f"Error extracting metadata via LangChain: {e}")
         return {}
+

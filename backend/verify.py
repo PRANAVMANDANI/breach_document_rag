@@ -28,14 +28,21 @@ async def run_verification():
     print(f"      Target Database:   {settings.DB_NAME}")
     print(f"      MongoDB Server:    {settings.MONGODB_URI.split('@')[-1] if '@' in settings.MONGODB_URI else settings.MONGODB_URI}")
     
-    # Check Groq API Key
+    # Check API Keys
     has_groq = bool(settings.GROQ_API_KEY)
+    has_openrouter = bool(settings.OPENROUTER_API_KEY)
     if settings.LLM_PROVIDER == "groq":
         print(f"      Groq API Key:      {'Set (Active)' if has_groq else 'Missing (Incomplete)'}")
         if not has_groq:
             print("\n[WARNING] GROQ_API_KEY is not defined in backend/.env.")
             print("          Groq LLM text generation will fail until a key is added.")
             print("          Get a key here: https://console.groq.com/")
+    elif settings.LLM_PROVIDER == "openrouter":
+        print(f"      OpenRouter Key:    {'Set (Active)' if has_openrouter else 'Missing (Incomplete)'}")
+        if not has_openrouter:
+            print("\n[WARNING] OPENROUTER_API_KEY is not defined in backend/.env.")
+            print("          OpenRouter text generation will fail until a key is added.")
+            print("          Get a key at: https://openrouter.ai/")
             
     # 2. Database Connection Check
     print("\n[2/6] Validating MongoDB Connection...")
@@ -46,7 +53,7 @@ async def run_verification():
         print(f"      -> ERROR: Could not connect to MongoDB: {e}")
         print("         Please check if your local MongoDB server is running or if Atlas URI is correct.")
         return
-
+ 
     # 3. Check text splitter chunking logic
     print("\n[3/6] Testing Recursive Character Text Splitter...")
     dummy_text = (
@@ -61,12 +68,15 @@ async def run_verification():
     print(f"      -> Split dummy text into {len(chunks)} chunks.")
     for i, chunk in enumerate(chunks):
         print(f"         Chunk {i+1} ({len(chunk)} chars): '{chunk}'")
-
+ 
     # 4. Check embedding generation & db insertion
-    missing_llm_key = (settings.LLM_PROVIDER == "groq" and not has_groq)
+    missing_llm_key = (
+        (settings.LLM_PROVIDER == "groq" and not has_groq) or
+        (settings.LLM_PROVIDER == "openrouter" and not has_openrouter)
+    )
     
     if missing_llm_key:
-        print("\n[INFO] Skipping API-dependent checks (Embeddings/Generation) because required Groq API key is not set.")
+        print("\n[INFO] Skipping API-dependent checks (Embeddings/Generation) because required LLM API key is not set.")
         await Database.disconnect()
         print("\n==================================================")
         return
