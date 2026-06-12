@@ -1,4 +1,4 @@
-# AskPDF: Deep Document Intelligence RAG Engine
+# AskPDF: Deep Document Intelligence RAG QNA Engine
 
 AskPDF is an advanced, production-ready Retrieval-Augmented Generation (RAG) system built to ingest, index, and query unstructured PDF documents. This engine implements state-of-the-art **Contextual Retrieval** concepts (pioneered by Anthropic) to resolve chunk-context loss, resulting in highly precise semantic search recall and page-level source citation.
 
