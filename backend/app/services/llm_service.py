@@ -14,6 +14,7 @@ Instructions:
 2. Do not fabricate facts. If the context does not contain any information related to the question, state that you cannot find the answer in the document.
 3. Be helpful, clear, and comprehensive. Structure your answer logically to provide a complete response.
 4. Always cite the page number(s) (e.g. "[Page X]") where the facts were found in the Context.
+5. DO NOT use any Markdown formatting in your response (such as bolding via `**`, headers via `#`, or markdown bullet lists). The response must be strictly in simple plain text, as the frontend client only displays unformatted normal text.
 """
 
 def build_prompt(query: str, chunks: List[Dict[str, Any]], history: List[Dict[str, str]] = None) -> str:
@@ -87,7 +88,7 @@ def get_llm_client(temperature: float = 0.1):
             temperature=temperature
         )
     elif settings.LLM_PROVIDER == "ollama":
-        from langchain_community.chat_models import ChatOllama
+        from langchain_ollama import ChatOllama
         return ChatOllama(
             base_url=settings.OLLAMA_BASE_URL,
             model=settings.OLLAMA_MODEL,
@@ -177,9 +178,23 @@ async def generate_response_stream(
 
     try:
         chat = get_llm_client(temperature=0.1)
+        is_first_chunk = True
+        accumulated_leading = ""
+        
         async for chunk in chat.astream([HumanMessage(content=prompt)]):
             if chunk.content:
-                yield chunk.content
+                # Remove markdown formatting characters to keep text plain and clean
+                content = chunk.content.replace("**", "").replace("*", "").replace("#", "").replace("`", "").replace("__", "")
+                
+                # Strip leading whitespace/newlines at the start of the stream
+                if is_first_chunk:
+                    accumulated_leading += content
+                    stripped = accumulated_leading.lstrip()
+                    if stripped:
+                        is_first_chunk = False
+                        yield stripped
+                else:
+                    yield content
     except Exception as e:
         logger.error(f"LangChain streaming failed: {e}")
         yield f"\n[Error generating response: {str(e)}]"
