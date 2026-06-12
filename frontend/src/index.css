@@ -1,0 +1,99 @@
+@import "tailwindcss";
+
+:root {
+  /* Claude Light Mode Colors - Cozy Low-Glare Paper Theme */
+  --claude-bg: #f3efe6;
+  --claude-sidebar: #e5e0d2;
+  --claude-border: rgba(25, 25, 25, 0.18); /* Defined light black border */
+  --claude-text-primary: #1e1e1a;
+  --claude-text-secondary: #5c5950;
+  --claude-accent: #cc624c;
+  --claude-accent-hover: #b8523d;
+  --claude-accent-bg: rgba(204, 98, 76, 0.08);
+  --claude-card: #faf9f5; /* Soft, warm off-white */
+  --claude-glow: radial-gradient(circle at 50% 50%, rgba(204, 98, 76, 0.04) 0%, rgba(229, 224, 210, 0.15) 50%, transparent 100%);
+  --claude-selection: rgba(204, 98, 76, 0.2);
+}
+
+.dark {
+  /* Claude Dark Mode Colors */
+  --claude-bg: #191919;
+  --claude-sidebar: #222222;
+  --claude-border: #383838; /* Slightly lighter, distinct borders in dark mode */
+  --claude-text-primary: #f1ece4;
+  --claude-text-secondary: #a19d96;
+  --claude-accent: #e05c3d;
+  --claude-accent-hover: #f06c4d;
+  --claude-accent-bg: rgba(224, 92, 61, 0.15);
+  --claude-card: #1f1f1f;
+  --claude-glow: radial-gradient(circle at 50% 50%, rgba(224, 92, 61, 0.08) 0%, rgba(31, 31, 31, 0.15) 50%, transparent 100%);
+  --claude-selection: rgba(224, 92, 61, 0.3);
+}
+
+@theme {
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-outfit: 'Outfit', system-ui, sans-serif;
+  --animate-pulse-slow: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  
+  /* Bind Claude Variables to Tailwind Utility Colors */
+  --color-claude-bg: var(--claude-bg);
+  --color-claude-sidebar: var(--claude-sidebar);
+  --color-claude-border: var(--claude-border);
+  --color-claude-text-primary: var(--claude-text-primary);
+  --color-claude-text-secondary: var(--claude-text-secondary);
+  --color-claude-accent: var(--claude-accent);
+  --color-claude-accent-hover: var(--claude-accent-hover);
+  --color-claude-accent-bg: var(--claude-accent-bg);
+  --color-claude-card: var(--claude-card);
+}
+
+body {
+  @apply bg-claude-bg text-claude-text-primary min-h-screen antialiased transition-colors duration-300;
+  selection-background-color: var(--claude-selection);
+}
+
+/* Custom scrollbars matching Claude aesthetic */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  @apply bg-claude-bg;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-claude-border/80 rounded-full hover:bg-claude-text-secondary/30 transition-colors;
+}
+
+/* Soft ambient glow radial backgrounds */
+.ambient-glow {
+  background: var(--claude-glow);
+  filter: blur(80px);
+}
+
+/* Redefined Clean Cards */
+.glass-panel {
+  @apply bg-claude-card border border-claude-border rounded-2xl shadow-sm;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.glass-panel-hover {
+  @apply hover:border-claude-accent/30 hover:shadow-md hover:shadow-claude-accent/2;
+}
+
+/* Markdown parsing output container */
+.markdown-content p {
+  @apply mb-4 leading-relaxed text-claude-text-primary;
+}
+.markdown-content ul, .markdown-content ol {
+  @apply mb-4 pl-6 list-disc leading-relaxed space-y-1 text-claude-text-primary;
+}
+.markdown-content li strong {
+  @apply text-claude-accent font-semibold;
+}
+.markdown-content code {
+  @apply px-1.5 py-0.5 rounded bg-claude-sidebar font-mono text-sm text-claude-accent;
+}
+.markdown-content blockquote {
+  @apply pl-4 border-l-4 border-claude-accent bg-claude-sidebar py-1 pr-2 rounded-r my-4 italic text-claude-text-secondary;
+}
+

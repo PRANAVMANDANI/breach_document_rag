@@ -1,0 +1,37 @@
+# Environment & Secrets (CRITICAL)
+.env
+.env*.local
+*.pem
+
+# Python dependencies & cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+
+# Node & React dependencies & builds
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+.eslintcache
+npm-debug.log*
+
+# Local Database & Local Uploads
+backend/uploads/
+uploads/
+*.db
+db/
+
+# IDE / Editor configurations
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
