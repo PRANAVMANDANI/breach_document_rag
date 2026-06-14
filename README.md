@@ -15,15 +15,9 @@ The system features a fully async **FastAPI** backend, a **MongoDB Atlas / local
 
 ## 📺 Demo
 
-<!-- 
-  HOW TO ADD YOUR DEMO VIDEO:
-  1. Record your screen (OBS, ShareX, or Windows Game Bar: Win+G)
-  2. Go to any GitHub Issue in your repo → drag & drop your .mp4 into the comment box
-  3. GitHub will generate a URL like: https://github.com/user-attachments/assets/xxxx.mp4
-  4. Replace the placeholder below with that URL — it will embed with a play button in the README
--->
 
-> 🎬 *Demo video coming soon — upload your screen recording here*
+<video src="video/rag.mp4" width="100%" controls></video>
+
 
 ---
 
