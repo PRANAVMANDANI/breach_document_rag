@@ -127,6 +127,16 @@ export default function DocumentList({
                       <span>{formatBytes(doc.file_size)}</span>
                       <span>•</span>
                       <span>{formatDate(doc.uploaded_at)}</span>
+                      <span>•</span>
+                      {doc.has_context ? (
+                        <span className="flex items-center text-purple-600 dark:text-purple-400 bg-purple-500/10 dark:bg-purple-500/20 px-1 rounded text-[9px] font-semibold font-mono tracking-tight" title="Uploaded with Contextual Retrieval">
+                          <Sparkles className="h-2.5 w-2.5 mr-0.5 text-purple-500" /> Contextual
+                        </span>
+                      ) : (
+                        <span className="flex items-center text-slate-500 dark:text-slate-400 bg-slate-500/10 dark:bg-slate-500/20 px-1 rounded text-[9px] font-medium font-mono tracking-tight" title="Uploaded without Contextual Retrieval">
+                          Standard
+                        </span>
+                      )}
                     </div>
                   </div>
                 </div>

@@ -64,4 +64,11 @@ async def init_db():
     chunks_collection = Database.get_chunks_collection()
     await chunks_collection.create_index("document_id")
     
+    # Standard text index on text/context fields for local keyword search fallback
+    try:
+        await chunks_collection.create_index([("text", "text"), ("context", "text")], name="fallback_text_index")
+        logger.info("Fallback text search index initialized successfully.")
+    except Exception as e:
+        logger.warning(f"Could not initialize fallback text search index: {e}")
+    
     logger.info("Database collections and standard indexes initialized successfully!")

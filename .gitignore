@@ -38,4 +38,5 @@ db/
 
 # Verification & Diagnostic scripts (AI testing files)
 backend/verify.py
+backend/verify_hybrid.py
 backend/list_models.py

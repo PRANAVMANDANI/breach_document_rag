@@ -145,35 +145,23 @@ def calculate_cosine_similarity(v1: List[float], v2: List[float]) -> float:
     return dot_product / (magnitude_v1 * magnitude_v2)
 
 
-async def search_similar_chunks(query_text: str, limit: int = 4, document_id: str = None) -> List[Dict[str, Any]]:
+async def search_vector_chunks(query_vector: List[float], limit: int = 20, document_id: str = None) -> List[Dict[str, Any]]:
     """
-    Searches for text chunks mathematically similar to the query.
-    Attempts MongoDB Atlas Vector Search first, and falls back to in-memory cosine similarity if needed.
+    Retrieves candidate chunks using Vector Search.
+    Tries Atlas Vector Search first, falling back to local cosine similarity calculation if Atlas fails.
     """
-    # 1. Generate embedding for user query
-    query_embeddings = await get_embeddings([query_text], is_query=True)
-    if not query_embeddings:
-        return []
-    query_vector = query_embeddings[0]
-
     chunks_collection = Database.get_chunks_collection()
-    
-    # Check if MongoDB URI is an Atlas cloud instance (indicated by mongodb+srv://)
     is_atlas = settings.MONGODB_URI.startswith("mongodb+srv://")
-    
+
     if is_atlas:
         try:
-            # Setup vector search pipeline stage
-            # The search index must be named "vector_index" in MongoDB Atlas
             vector_search_stage = {
-                "index": "vector_index",
+                "index": settings.ATLAS_VECTOR_INDEX,
                 "path": "embedding",
                 "queryVector": query_vector,
                 "numCandidates": 100,
                 "limit": limit
             }
-            
-            # If document_id is provided, restrict search to that document only
             if document_id:
                 vector_search_stage["filter"] = {
                     "document_id": ObjectId(document_id)
@@ -191,8 +179,7 @@ async def search_similar_chunks(query_text: str, limit: int = 4, document_id: st
                     }
                 }
             ]
-            
-            # Run aggregation query
+
             results = []
             cursor = chunks_collection.aggregate(pipeline)
             async for doc in cursor:
@@ -201,24 +188,22 @@ async def search_similar_chunks(query_text: str, limit: int = 4, document_id: st
                     "text": doc["text"],
                     "context": doc.get("context", ""),
                     "page_number": doc["metadata"]["page_number"],
-                    "score": doc.get("score", 1.0) # Fallback to 1.0 if score metadata is missing
+                    "score": doc.get("score", 1.0)
                 })
-            
+
             if results:
                 logger.info(f"Atlas Vector Search returned {len(results)} matches.")
                 return results
-                
-        except Exception as atlas_err:
-            logger.warning(f"MongoDB Atlas Vector Search query failed, falling back to local Python cosine similarity: {atlas_err}")
-            # fall through to python similarity calculation
 
-    # 2. Local fallback calculation (fetches all chunks for the document, computes similarity in Python)
+        except Exception as atlas_err:
+            logger.warning(f"MongoDB Atlas Vector Search failed, falling back to local cosine similarity: {atlas_err}")
+
+    # Local Fallback
     logger.info("Performing local in-memory cosine similarity search...")
     filter_query = {}
     if document_id:
         filter_query["document_id"] = ObjectId(document_id)
 
-    # Fetch candidate documents
     candidates = []
     cursor = chunks_collection.find(filter_query, {"text": 1, "context": 1, "embedding": 1, "metadata": 1, "document_id": 1})
     async for doc in cursor:
@@ -227,7 +212,6 @@ async def search_similar_chunks(query_text: str, limit: int = 4, document_id: st
     if not candidates:
         return []
 
-    # Calculate similarity scores
     scored_results = []
     for doc in candidates:
         similarity = calculate_cosine_similarity(query_vector, doc["embedding"])
@@ -239,6 +223,267 @@ async def search_similar_chunks(query_text: str, limit: int = 4, document_id: st
             "score": similarity
         })
 
-    # Sort results by similarity score descending and apply limit
     scored_results.sort(key=lambda x: x["score"], reverse=True)
     return scored_results[:limit]
+
+
+async def search_keyword_chunks(query_text: str, limit: int = 20, document_id: str = None) -> List[Dict[str, Any]]:
+    """
+    Retrieves candidate chunks using Keyword/Lexical Search.
+    Tries Atlas Search first. Falls back to standard MongoDB $text search, then regex term matching.
+    """
+    chunks_collection = Database.get_chunks_collection()
+    is_atlas = settings.MONGODB_URI.startswith("mongodb+srv://")
+
+    # 1. Try MongoDB Atlas Search ($search)
+    if is_atlas:
+        try:
+            search_clause = {
+                "text": {
+                    "query": query_text,
+                    "path": ["text", "context"]
+                }
+            }
+            
+            if document_id:
+                search_stage = {
+                    "index": settings.ATLAS_SEARCH_INDEX,
+                    "compound": {
+                        "must": [search_clause],
+                        "filter": [
+                            {
+                                "equals": {
+                                    "value": ObjectId(document_id),
+                                    "path": "document_id"
+                                }
+                            }
+                        ]
+                    }
+                }
+            else:
+                search_stage = {
+                    "index": settings.ATLAS_SEARCH_INDEX,
+                    "text": {
+                        "query": query_text,
+                        "path": ["text", "context"]
+                    }
+                }
+
+            pipeline = [
+                {"$search": search_stage},
+                {
+                    "$project": {
+                        "document_id": 1,
+                        "text": 1,
+                        "context": 1,
+                        "metadata": 1,
+                        "score": {"$meta": "searchScore"}
+                    }
+                },
+                {"$limit": limit}
+            ]
+
+            results = []
+            try:
+                cursor = chunks_collection.aggregate(pipeline)
+                async for doc in cursor:
+                    results.append({
+                        "document_id": str(doc["document_id"]),
+                        "text": doc["text"],
+                        "context": doc.get("context", ""),
+                        "page_number": doc["metadata"]["page_number"],
+                        "score": doc.get("score", 1.0)
+                    })
+            except Exception as compound_err:
+                logger.warning(f"Atlas Search with compound query failed, trying search with post-match filter: {compound_err}")
+                # Secondary fallback: $search without compound, then $match document_id
+                search_stage_simple = {
+                    "index": settings.ATLAS_SEARCH_INDEX,
+                    "text": {
+                        "query": query_text,
+                        "path": ["text", "context"]
+                    }
+                }
+                pipeline_fallback = [
+                    {"$search": search_stage_simple}
+                ]
+                if document_id:
+                    pipeline_fallback.append({"$match": {"document_id": ObjectId(document_id)}})
+                
+                pipeline_fallback.extend([
+                    {
+                        "$project": {
+                            "document_id": 1,
+                            "text": 1,
+                            "context": 1,
+                            "metadata": 1,
+                            "score": {"$meta": "searchScore"}
+                        }
+                    },
+                    {"$limit": limit}
+                ])
+                
+                results = []
+                cursor = chunks_collection.aggregate(pipeline_fallback)
+                async for doc in cursor:
+                    results.append({
+                        "document_id": str(doc["document_id"]),
+                        "text": doc["text"],
+                        "context": doc.get("context", ""),
+                        "page_number": doc["metadata"]["page_number"],
+                        "score": doc.get("score", 1.0)
+                    })
+
+            if results:
+                logger.info(f"Atlas Search returned {len(results)} matches.")
+                return results
+
+        except Exception as atlas_search_err:
+            logger.warning(f"MongoDB Atlas Search ($search) failed, falling back to standard text index: {atlas_search_err}")
+
+    # 2. Traditional MongoDB Text Index search ($text) fallback
+    try:
+        query_filter = {}
+        if document_id:
+            query_filter["document_id"] = ObjectId(document_id)
+        query_filter["$text"] = {"$search": query_text}
+
+        cursor = chunks_collection.find(
+            query_filter,
+            {
+                "document_id": 1,
+                "text": 1,
+                "context": 1,
+                "metadata": 1,
+                "score": {"$meta": "textScore"}
+            }
+        ).sort([("score", {"$meta": "textScore"})]).limit(limit)
+
+        results = []
+        async for doc in cursor:
+            results.append({
+                "document_id": str(doc["document_id"]),
+                "text": doc["text"],
+                "context": doc.get("context", ""),
+                "page_number": doc["metadata"]["page_number"],
+                "score": doc.get("score", 1.0)
+            })
+
+        if results:
+            logger.info(f"MongoDB Fallback Text Index Search returned {len(results)} matches.")
+            return results
+
+    except Exception as text_index_err:
+        logger.warning(f"MongoDB fallback text search index query failed, falling back to regex matching: {text_index_err}")
+
+    # 3. Python-based regex search fallback
+    try:
+        words = [w for w in query_text.strip().split() if len(w) > 2]
+        if not words:
+            words = [query_text.strip()]
+        
+        regex_pattern = "|".join(words)
+        query_filter = {}
+        if document_id:
+            query_filter["document_id"] = ObjectId(document_id)
+        
+        query_filter["$or"] = [
+            {"text": {"$regex": regex_pattern, "$options": "i"}},
+            {"context": {"$regex": regex_pattern, "$options": "i"}}
+        ]
+
+        cursor = chunks_collection.find(
+            query_filter,
+            {"document_id": 1, "text": 1, "context": 1, "metadata": 1}
+        ).limit(limit)
+
+        results = []
+        async for doc in cursor:
+            text_lower = doc["text"].lower()
+            context_lower = doc.get("context", "").lower()
+            score = 0.0
+            for word in words:
+                w_lower = word.lower()
+                if w_lower in text_lower:
+                    score += 1.0
+                if w_lower in context_lower:
+                    score += 0.5
+            
+            results.append({
+                "document_id": str(doc["document_id"]),
+                "text": doc["text"],
+                "context": doc.get("context", ""),
+                "page_number": doc["metadata"]["page_number"],
+                "score": score
+            })
+
+        results.sort(key=lambda x: x["score"], reverse=True)
+        logger.info(f"Regex Keyword Search fallback returned {len(results)} matches.")
+        return results
+    except Exception as regex_err:
+        logger.error(f"Regex Keyword Search fallback failed: {regex_err}")
+        return []
+
+
+def reciprocal_rank_fusion(
+    vector_results: List[Dict[str, Any]], 
+    keyword_results: List[Dict[str, Any]], 
+    k: int = 60
+) -> List[Dict[str, Any]]:
+    """
+    Combines vector and keyword search results using Reciprocal Rank Fusion (RRF).
+    """
+    rrf_scores = {}
+    doc_map = {}
+
+    def get_chunk_key(chunk):
+        return f"{chunk['document_id']}_{chunk['page_number']}_{chunk['text'][:100]}"
+
+    for rank, chunk in enumerate(vector_results):
+        key = get_chunk_key(chunk)
+        doc_map[key] = chunk
+        rrf_scores[key] = rrf_scores.get(key, 0.0) + (1.0 / (k + rank + 1))
+
+    for rank, chunk in enumerate(keyword_results):
+        key = get_chunk_key(chunk)
+        if key not in doc_map:
+            doc_map[key] = chunk
+        rrf_scores[key] = rrf_scores.get(key, 0.0) + (1.0 / (k + rank + 1))
+
+    sorted_keys = sorted(rrf_scores.keys(), key=lambda x: rrf_scores[x], reverse=True)
+
+    combined = []
+    for key in sorted_keys:
+        chunk = doc_map[key].copy()
+        chunk["score"] = rrf_scores[key]
+        combined.append(chunk)
+
+    return combined
+
+
+async def search_similar_chunks(query_text: str, limit: int = 4, document_id: str = None) -> List[Dict[str, Any]]:
+    """
+    Performs a hybrid search combining Vector Search and Atlas Search (keyword)
+    using Reciprocal Rank Fusion (RRF).
+    """
+    # 1. Generate query embedding
+    query_embeddings = await get_embeddings([query_text], is_query=True)
+    if not query_embeddings:
+        return []
+    query_vector = query_embeddings[0]
+
+    # Retrieve slightly more candidates for better RRF combination
+    candidate_limit = max(limit * 2, 40)
+
+    # 2. Run searches in parallel
+    vector_task = search_vector_chunks(query_vector, limit=candidate_limit, document_id=document_id)
+    keyword_task = search_keyword_chunks(query_text, limit=candidate_limit, document_id=document_id)
+
+    vector_results, keyword_results = await asyncio.gather(vector_task, keyword_task)
+
+    # 3. Fuse results using Reciprocal Rank Fusion (RRF)
+    hybrid_results = reciprocal_rank_fusion(vector_results, keyword_results)
+
+    # Return top results up to the limit
+    return hybrid_results[:limit]
+

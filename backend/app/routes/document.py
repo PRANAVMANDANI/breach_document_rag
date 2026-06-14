@@ -167,7 +167,8 @@ async def upload_document(
             "uploaded_at": datetime.utcnow(),
             "title": title,
             "author": author,
-            "processing_progress": 0
+            "processing_progress": 0,
+            "has_context": generate_context
         }
         
         documents_collection = Database.get_documents_collection()
@@ -190,7 +191,8 @@ async def upload_document(
             status="processing",
             processing_progress=0,
             title=title,
-            author=author
+            author=author,
+            has_context=generate_context
         )
     except Exception as e:
         logger.error(f"Error initiating upload: {e}")
@@ -219,7 +221,8 @@ async def list_documents():
                 status=doc["status"],
                 processing_progress=doc.get("processing_progress", 0 if doc["status"] == "processing" else 100),
                 title=doc.get("title"),
-                author=doc.get("author")
+                author=doc.get("author"),
+                has_context=doc.get("has_context", False)
             ))
         return docs
     except Exception as e:

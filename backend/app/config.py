@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     
     # MongoDB Settings
     MONGODB_URI: str = "mongodb://localhost:27017"
+    ATLAS_SEARCH_INDEX: str = "search_index"
+    ATLAS_VECTOR_INDEX: str = "vector_index"
+
 
     # Configuration for loading from .env
     model_config = SettingsConfigDict(

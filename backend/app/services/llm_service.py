@@ -92,7 +92,8 @@ def get_llm_client(temperature: float = 0.1):
         return ChatOllama(
             base_url=settings.OLLAMA_BASE_URL,
             model=settings.OLLAMA_MODEL,
-            temperature=temperature
+            temperature=temperature,
+            num_ctx=16384
         )
     else:
         raise ValueError(f"Unsupported LLM provider: {settings.LLM_PROVIDER}")

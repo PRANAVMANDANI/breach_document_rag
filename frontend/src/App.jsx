@@ -12,7 +12,7 @@ export default function App() {
   const [selectedDocId, setSelectedDocId] = useState(null);
   const [connectionStatus, setConnectionStatus] = useState('checking');
   const [theme, setTheme] = useState(() => {
-    return localStorage.getItem('theme') || 'light';
+    return localStorage.getItem('theme') || 'dark';
   });
 
   useEffect(() => {

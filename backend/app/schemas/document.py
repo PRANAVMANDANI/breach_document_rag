@@ -11,3 +11,5 @@ class DocumentOut(BaseModel):
     title: Optional[str] = None
     author: Optional[str] = None
     processing_progress: Optional[int] = None
+    has_context: bool = False
+
