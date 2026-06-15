@@ -40,3 +40,7 @@ db/
 backend/verify.py
 backend/verify_hybrid.py
 backend/list_models.py
+
+# System OS Files
+.DS_Store
+Thumbs.db
