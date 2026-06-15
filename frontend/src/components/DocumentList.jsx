@@ -58,23 +58,6 @@ export default function DocumentList({
         </span>
       </div>
 
-      {/* Select All Option */}
-      {documents.length > 0 && (
-        <div 
-          onClick={() => onSelectDocument(null)}
-          className={`flex items-center justify-between p-3 mb-3 rounded-xl border cursor-pointer transition-all duration-200 ${
-            selectedDocId === null 
-              ? "border-claude-accent/50 bg-claude-accent-bg text-claude-accent font-semibold" 
-              : "border-claude-border bg-claude-sidebar/20 text-claude-text-secondary hover:border-claude-border hover:bg-claude-sidebar/40 hover:text-claude-text-primary"
-          }`}
-        >
-          <div className="flex items-center space-x-2.5">
-            <Sparkles className={`h-4.5 w-4.5 ${selectedDocId === null ? 'text-claude-accent' : 'text-claude-text-secondary'}`} />
-            <span className="text-sm font-medium">Search All Documents</span>
-          </div>
-          <span className="text-[10px] uppercase font-mono tracking-wider font-semibold opacity-85">Global</span>
-        </div>
-      )}
 
       {/* Document List */}
       <div className="flex-1 overflow-y-auto space-y-2 lg:max-h-none pr-1">
@@ -146,7 +129,7 @@ export default function DocumentList({
                   {isProcessing && (
                     <div className="flex items-center space-x-1 text-amber-600 dark:text-amber-400 px-2 py-0.5 rounded-full bg-amber-500/5 text-[10px] font-medium border border-amber-500/20">
                       <Loader2 className="h-3 w-3 animate-spin" />
-                      <span>Indexing {doc.processing_progress !== undefined && doc.processing_progress !== null ? `${doc.processing_progress}%` : '0%'}</span>
+                      <span>Analyzing {doc.processing_progress !== undefined && doc.processing_progress !== null ? `${doc.processing_progress}%` : '0%'}</span>
                     </div>
                   )}
 
@@ -158,9 +141,23 @@ export default function DocumentList({
                   )}
 
                   {doc.status === 'processed' && (
-                    <div className="flex items-center space-x-1 text-emerald-600 dark:text-emerald-400 px-2 py-0.5 rounded-full bg-emerald-500/5 text-[10px] font-medium border border-emerald-500/20">
-                      <CheckCircle2 className="h-3 w-3" />
-                      <span>Ready</span>
+                    <div className="flex items-center space-x-1">
+                      {doc.has_audit && doc.audit_score !== undefined && doc.audit_score !== null ? (
+                        <div className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                          doc.audit_score >= 80 
+                            ? 'bg-emerald-500/5 border-emerald-500/20 text-emerald-600 dark:text-emerald-400' 
+                            : doc.audit_score >= 50
+                              ? 'bg-amber-500/5 border-amber-500/20 text-amber-600 dark:text-amber-400'
+                              : 'bg-rose-500/5 border-rose-500/20 text-rose-600 dark:text-rose-400'
+                        }`}>
+                          Score: {doc.audit_score}
+                        </div>
+                      ) : (
+                        <div className="flex items-center space-x-1 text-emerald-600 dark:text-emerald-400 px-2 py-0.5 rounded-full bg-emerald-500/5 text-[10px] font-medium border border-emerald-500/20">
+                          <CheckCircle2 className="h-3 w-3" />
+                          <span>Ready</span>
+                        </div>
+                      )}
                     </div>
                   )}
 

@@ -13,9 +13,9 @@ export default function Navbar({ connectionStatus, theme, setTheme }) {
           </div>
           <div>
             <h1 className="font-outfit text-xl font-bold tracking-tight text-claude-text-primary">
-              Ask<span className="text-claude-accent font-extrabold">PDF</span>
+              Legal<span className="text-claude-accent font-extrabold">Eagle</span>
             </h1>
-            <p className="text-[10px] text-claude-text-secondary font-mono tracking-widest uppercase">Document Intelligence</p>
+            <p className="text-[10px] text-claude-text-secondary font-mono tracking-widest uppercase">Contract Risk Agent</p>
           </div>
         </div>
 

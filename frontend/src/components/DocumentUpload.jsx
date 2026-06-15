@@ -110,8 +110,8 @@ export default function DocumentUpload({ apiBaseUrl, onUploadSuccess, documents 
       {/* Toggle Contextual Retrieval */}
       <div className="flex items-center justify-between p-3.5 lg:p-2.5 mb-4 lg:mb-2.5 rounded-xl border border-claude-border bg-claude-sidebar/40 shrink-0 transition-colors duration-300">
         <div className="flex flex-col space-y-0.5">
-          <span className="text-xs lg:text-[11px] font-semibold text-claude-text-primary">Contextual Retrieval</span>
-          <span className="text-[10px] lg:text-[9px] text-claude-text-secondary leading-tight">Injects situational summaries per chunk</span>
+          <span className="text-xs lg:text-[11px] font-semibold text-claude-text-primary">Deep Compliance Audit</span>
+          <span className="text-[10px] lg:text-[9px] text-claude-text-secondary leading-tight">Runs Brave Search & contextual analysis (more thorough)</span>
         </div>
         <button
           type="button"
@@ -157,7 +157,7 @@ export default function DocumentUpload({ apiBaseUrl, onUploadSuccess, documents 
             <Loader2 className="h-10 w-10 lg:h-6 lg:w-6 text-claude-accent animate-spin" />
             <div>
               <p className="font-semibold text-claude-text-primary text-sm lg:text-xs">Uploading {uploadedFile}...</p>
-              <p className="text-xs lg:text-[10px] text-claude-text-secondary mt-1 lg:mt-0.5">Parsing text and indexing...</p>
+              <p className="text-xs lg:text-[10px] text-claude-text-secondary mt-1 lg:mt-0.5">Parsing and analyzing...</p>
             </div>
           </div>
         ) : (

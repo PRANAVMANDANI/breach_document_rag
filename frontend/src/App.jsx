@@ -3,6 +3,9 @@ import Navbar from './components/Navbar';
 import DocumentUpload from './components/DocumentUpload';
 import DocumentList from './components/DocumentList';
 import ChatInterface from './components/ChatInterface';
+import AuditDashboard from './components/AuditDashboard';
+import { Shield, Bot } from 'lucide-react';
+
 
 // Backend endpoint configuration. Standard dev is localhost:8000/api
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
@@ -11,6 +14,7 @@ export default function App() {
   const [documents, setDocuments] = useState([]);
   const [selectedDocId, setSelectedDocId] = useState(null);
   const [connectionStatus, setConnectionStatus] = useState('checking');
+  const [activeWorkspaceTab, setActiveWorkspaceTab] = useState('dashboard');
   const [theme, setTheme] = useState(() => {
     return localStorage.getItem('theme') || 'dark';
   });
@@ -47,12 +51,15 @@ export default function App() {
   }, []);
 
   // 2. Fetch the initial list of documents
-  const fetchDocuments = async () => {
+  const fetchDocuments = async (isInitial = false) => {
     try {
       const response = await fetch(`${API_BASE_URL}/documents/`);
       if (response.ok) {
         const data = await response.json();
         setDocuments(data);
+        if (isInitial && data.length > 0) {
+          setSelectedDocId(data[0].id);
+        }
       }
     } catch (err) {
       console.error("Error fetching documents:", err);
@@ -60,7 +67,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    fetchDocuments();
+    fetchDocuments(true);
   }, []);
 
   // 3. Smart background status polling
@@ -79,15 +86,19 @@ export default function App() {
   const handleUploadSuccess = (newDoc) => {
     // Add newly uploaded file immediately to the top of the list
     setDocuments(prev => [newDoc, ...prev]);
+    // Switch to the newly uploaded document
+    setSelectedDocId(newDoc.id);
   };
 
   const handleDeleteDocument = (id) => {
     // Remove the deleted document from local state
-    setDocuments(prev => prev.filter(doc => doc.id !== id));
-    // If the deleted document was currently active, deselect it
-    if (selectedDocId === id) {
-      setSelectedDocId(null);
-    }
+    setDocuments(prev => {
+      const updated = prev.filter(doc => doc.id !== id);
+      if (selectedDocId === id) {
+        setSelectedDocId(updated.length > 0 ? updated[0].id : null);
+      }
+      return updated;
+    });
   };
 
   return (
@@ -119,13 +130,58 @@ export default function App() {
           />
         </div>
 
-        {/* Chat Interface: Handles streaming prompts & citations */}
-        <div className="flex-1 flex flex-col min-w-0 lg:h-full">
-          <ChatInterface 
-            apiBaseUrl={API_BASE_URL}
-            selectedDocId={selectedDocId}
-            documents={documents}
-          />
+        {/* Workspace: Unified single large box with tab selector at the top */}
+        <div className="flex-1 flex flex-col min-w-0 lg:h-full overflow-hidden glass-panel transition-colors duration-300">
+          
+          {/* Workspace Tabs */}
+          <div className="flex bg-claude-sidebar/40 border-b border-claude-border p-1.5 shrink-0 transition-colors duration-300">
+            <button
+              onClick={() => setActiveWorkspaceTab('dashboard')}
+              className={`flex-1 py-2.5 text-xs font-bold font-outfit rounded-xl cursor-pointer transition-all duration-200 flex items-center justify-center gap-2 outline-none ${
+                activeWorkspaceTab === 'dashboard'
+                  ? 'bg-claude-card text-claude-accent border border-claude-border shadow-sm'
+                  : 'text-claude-text-secondary hover:text-claude-text-primary'
+              }`}
+            >
+              <Shield className="h-4 w-4" />
+              <span>Compliance Audit Dashboard</span>
+            </button>
+            <button
+              onClick={() => setActiveWorkspaceTab('chat')}
+              className={`flex-1 py-2.5 text-xs font-bold font-outfit rounded-xl cursor-pointer transition-all duration-200 flex items-center justify-center gap-2 outline-none ${
+                activeWorkspaceTab === 'chat'
+                  ? 'bg-claude-card text-claude-accent border border-claude-border shadow-sm'
+                  : 'text-claude-text-secondary hover:text-claude-text-primary'
+              }`}
+            >
+              <Bot className="h-4 w-4" />
+              <span>Sara AI Q&A Assistant</span>
+            </button>
+          </div>
+
+          {/* Workspace Content Body */}
+          <div className="flex-1 min-h-0 overflow-hidden relative">
+            {activeWorkspaceTab === 'dashboard' ? (
+              selectedDocId ? (
+                <AuditDashboard 
+                  document={documents.find(d => d.id === selectedDocId)}
+                  apiBaseUrl={API_BASE_URL}
+                />
+              ) : (
+                <div className="flex flex-col items-center justify-center h-full text-center text-claude-text-secondary p-8 transition-colors duration-300">
+                  <Shield className="h-12 w-12 text-claude-border mb-3 stroke-[1.5]" />
+                  <h3 className="font-outfit font-bold text-claude-text-primary text-sm mb-1">No Document Selected</h3>
+                  <p className="text-xs max-w-xs leading-relaxed">Select a contract from the list to view its legal compliance dashboard.</p>
+                </div>
+              )
+            ) : (
+              <ChatInterface 
+                apiBaseUrl={API_BASE_URL}
+                selectedDocId={selectedDocId}
+                documents={documents}
+              />
+            )}
+          </div>
         </div>
 
       </main>

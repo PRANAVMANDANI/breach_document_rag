@@ -104,6 +104,8 @@ async def store_document_chunks(document_id: str, chunks: List[Dict[str, Any]], 
                 "text": chunk["text"],
                 "context": chunk.get("context", ""),
                 "embedding": embeddings[idx],
+                "clause_reference": chunk.get("clause_reference", "N/A"),
+                "category": chunk.get("category", "General"),
                 "metadata": {
                     "page_number": chunk["metadata"]["page_number"],
                     "chunk_index": chunk["metadata"]["chunk_index"]
@@ -214,6 +216,8 @@ async def search_vector_chunks(query_vector: List[float], limit: int = 20, docum
 
     scored_results = []
     for doc in candidates:
+        if "embedding" not in doc or not doc["embedding"]:
+            continue
         similarity = calculate_cosine_similarity(query_vector, doc["embedding"])
         scored_results.append({
             "document_id": str(doc["document_id"]),
@@ -486,4 +490,73 @@ async def search_similar_chunks(query_text: str, limit: int = 4, document_id: st
 
     # Return top results up to the limit
     return hybrid_results[:limit]
+
+
+async def wait_for_atlas_indexing(document_id: str, timeout_seconds: int = 30) -> bool:
+    """
+    Waits for MongoDB Atlas Vector index to fully index all chunks of a document.
+    Queries the Atlas Vector Search index repeatedly until the indexed count matches 
+    the total chunks count in the database, or times out.
+    """
+    is_atlas = settings.MONGODB_URI.startswith("mongodb+srv://")
+    if not is_atlas:
+        return True
+
+    chunks_collection = Database.get_chunks_collection()
+    
+    # 1. Count the actual chunks stored in MongoDB synchronously
+    total_stored = await chunks_collection.count_documents({"document_id": ObjectId(document_id)})
+    if total_stored == 0:
+        return True
+
+    # 2. Get embedding dimensions dynamically from first chunk
+    sample_chunk = await chunks_collection.find_one({"document_id": ObjectId(document_id)})
+    dimensions = 384
+    if sample_chunk and "embedding" in sample_chunk:
+        dimensions = len(sample_chunk["embedding"])
+
+    dummy_vector = [0.0] * dimensions
+    
+    logger.info(f"Atlas connection detected. Waiting for Atlas Vector Index to index all {total_stored} chunks...")
+    
+    start_time = asyncio.get_event_loop().time()
+    poll_interval = 1.5
+    
+    while (asyncio.get_event_loop().time() - start_time) < timeout_seconds:
+        pipeline = [
+            {
+                "$vectorSearch": {
+                    "index": settings.ATLAS_VECTOR_INDEX,
+                    "path": "embedding",
+                    "queryVector": dummy_vector,
+                    "numCandidates": max(100, total_stored * 2),
+                    "limit": max(100, total_stored * 2),
+                    "filter": {"document_id": ObjectId(document_id)}
+                }
+            },
+            {
+                "$count": "count"
+            }
+        ]
+        try:
+            indexed_count = 0
+            cursor = chunks_collection.aggregate(pipeline)
+            async for doc in cursor:
+                indexed_count = doc.get("count", 0)
+            
+            logger.info(f"Atlas Search Index progress for doc {document_id}: {indexed_count}/{total_stored} chunks indexed.")
+            
+            if indexed_count >= total_stored:
+                logger.info(f"Atlas Search Index is fully synchronized for document {document_id}.")
+                return True
+        except Exception as e:
+            # If the index is not found or is still building, it might throw an error.
+            # We catch it and log/wait.
+            logger.warning(f"Error checking Atlas Vector index count: {e}. Index may still be building.")
+            
+        await asyncio.sleep(poll_interval)
+        
+    logger.warning(f"Timeout waiting for Atlas Search Index synchronization for document {document_id}. Proceeding anyway.")
+    return False
+
 

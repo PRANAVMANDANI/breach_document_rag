@@ -12,4 +12,8 @@ class DocumentOut(BaseModel):
     author: Optional[str] = None
     processing_progress: Optional[int] = None
     has_context: bool = False
+    audit_score: Optional[int] = None
+    has_audit: bool = False
+    audit_report: Optional[dict] = None
+
 

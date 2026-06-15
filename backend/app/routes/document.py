@@ -5,13 +5,16 @@ from datetime import datetime
 from typing import List
 from bson import ObjectId
 from fastapi import APIRouter, UploadFile, File, BackgroundTasks, HTTPException, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from app.database import Database
 from app.config import settings
 from app.schemas.document import DocumentOut
 from app.services.pdf_service import extract_pages_from_pdf, chunk_pdf_document, extract_metadata_from_pdf
 from app.services.llm_service import extract_metadata_from_text, generate_chunk_context, generate_document_summary
 from app.services.vector_service import store_document_chunks
+from app.services.agent_service import run_contract_audit
+from app.services.report_service import generate_audit_pdf
+
 
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -50,8 +53,9 @@ async def process_pdf_background(
                 if not author and llm_meta.get("author"):
                     author = llm_meta["author"]
         
-        # 2. Split pages into overlapping text chunks
-        chunks = chunk_pdf_document(pages_data)
+        # 2. Extract structured clauses from pages (with fallback to text splitting)
+        from app.services.llm_service import extract_and_chunk_pdf_document
+        chunks = await extract_and_chunk_pdf_document(pages_data)
         
         # 2b. Generate situational contexts for chunks if enabled
         if chunks and generate_context:
@@ -110,17 +114,39 @@ async def process_pdf_background(
         # 3. Generate embeddings and save chunks in MongoDB
         await store_document_chunks(document_id, chunks, start_progress=80 if generate_context else 0)
         
+        # 3b. Run Automated Legal Compliance Audit
+        try:
+            # Wait dynamically for MongoDB Atlas asynchronous search indexes to synchronize
+            from app.services.vector_service import wait_for_atlas_indexing
+            await wait_for_atlas_indexing(document_id, timeout_seconds=30)
+                
+            logger.info(f"Running automated compliance risk audit for document {document_id}...")
+            audit_report = await run_contract_audit(document_id)
+            audit_score = audit_report.get("overall_score", 100)
+            has_audit = True
+        except Exception as audit_err:
+            logger.error(f"Failed to generate compliance audit: {audit_err}")
+            audit_report = None
+            audit_score = None
+            has_audit = False
+
         # 4. Mark document status as processed and update metadata
+        update_data = {
+            "status": "processed",
+            "processing_progress": 100,
+            "title": title,
+            "author": author,
+            "has_audit": has_audit
+        }
+        if has_audit:
+            update_data["audit_score"] = audit_score
+            update_data["audit_report"] = audit_report
+
         await documents_collection.update_one(
             {"_id": ObjectId(document_id)},
-            {"$set": {
-                "status": "processed",
-                "processing_progress": 100,
-                "title": title,
-                "author": author
-            }}
+            {"$set": update_data}
         )
-        logger.info(f"Background processing completed successfully for document {document_id}")
+        logger.info(f"Background processing and legal audit completed successfully for document {document_id}")
     except Exception as e:
         logger.error(f"Failed to process document {document_id} in background: {e}")
         documents_collection = Database.get_documents_collection()
@@ -222,7 +248,10 @@ async def list_documents():
                 processing_progress=doc.get("processing_progress", 0 if doc["status"] == "processing" else 100),
                 title=doc.get("title"),
                 author=doc.get("author"),
-                has_context=doc.get("has_context", False)
+                has_context=doc.get("has_context", False),
+                audit_score=doc.get("audit_score"),
+                has_audit=doc.get("has_audit", False),
+                audit_report=doc.get("audit_report")
             ))
         return docs
     except Exception as e:
@@ -288,3 +317,48 @@ async def get_document_pdf(document_id: str):
             detail="PDF file not found."
         )
     return FileResponse(file_path, media_type="application/pdf")
+
+
+@router.get("/{document_id}/report")
+async def get_document_report(document_id: str):
+    """
+    Generates a beautifully formatted PDF compliance report and returns it as a download.
+    """
+    try:
+        documents_collection = Database.get_documents_collection()
+        doc = await documents_collection.find_one({"_id": ObjectId(document_id)})
+        if not doc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Document not found."
+            )
+        
+        if not doc.get("has_audit") or not doc.get("audit_report"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This document does not have a processed compliance audit report."
+            )
+            
+        # Compile PDF report using report service
+        pdf_buffer = generate_audit_pdf(doc["audit_report"], doc["filename"])
+        
+        # Return StreamingResponse with PDF headers
+        headers = {
+            "Content-Disposition": f"attachment; filename=LegalEagle_Audit_{doc['filename']}",
+            "Access-Control-Expose-Headers": "Content-Disposition"
+        }
+        
+        return StreamingResponse(
+            pdf_buffer,
+            media_type="application/pdf",
+            headers=headers
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error compiling audit report PDF: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate report PDF: {str(e)}"
+        )
+

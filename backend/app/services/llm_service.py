@@ -248,3 +248,144 @@ Do not include any other text, markdown formatting, or explanation."""
         logger.error(f"Error extracting metadata via LangChain: {e}")
         return {}
 
+
+async def extract_clauses_from_page(page_text: str, page_number: int) -> List[Dict[str, Any]]:
+    """
+    Uses LLM to perform structured clause extraction and classification from a page of text.
+    """
+    if not page_text:
+        return []
+
+    prompt = f"""You are an expert legal contract compliance auditor.
+Read the following text from Page {page_number} of a document and extract all legal clauses.
+A legal clause is any numbered section, paragraph, or clear subsection (e.g. "Clause 2.2", "Section 5.1", "4. LIABILITY", "Confidentiality:", etc.) that establishes a legal duty, right, or liability.
+
+For each clause, you must extract:
+1. Clause Reference/Number (e.g. "2.2", "Section 4.1", "Clause 7", or "N/A" if it has no number/title).
+2. Category. Choose exactly one of the following:
+   - Confidentiality
+   - Liability
+   - Indemnification
+   - Non-Compete
+   - Non-Solicitation
+   - IP Assignment
+   - Termination
+   - Governing Law
+   - Arbitration
+   - Renewal
+   - General (if it's another standard clause or general text)
+3. Exact Clause Text. Quote the exact text of the clause from the page. Do not summarize or paraphrase.
+
+Respond ONLY in valid JSON format containing a list of objects.
+Example response format:
+{{
+  "extracted_clauses": [
+    {{
+      "clause_reference": "2.2",
+      "category": "Confidentiality",
+      "exact_text": "The receiving party shall keep all information confidential..."
+    }}
+  ]
+}}
+
+Page Text:
+{page_text}
+
+Respond in the exact JSON format above. Do not include any other text, markdown formatting, or explanations."""
+
+    try:
+        chat = get_llm_client(temperature=0.1)
+        response = await chat.ainvoke([HumanMessage(content=prompt)])
+        text_res = response.content.strip()
+        
+        # Clean markdown code blocks if any
+        if text_res.startswith("```"):
+            lines = text_res.split("\n")
+            if lines[0].startswith("```json"):
+                text_res = "\n".join(lines[1:-1])
+            elif lines[0].startswith("```"):
+                text_res = "\n".join(lines[1:-1])
+                
+        # Find start and end of JSON list/dictionary
+        start_idx = text_res.find("{")
+        end_idx = text_res.rfind("}")
+        if start_idx != -1 and end_idx != -1:
+            text_res = text_res[start_idx:end_idx + 1]
+            
+        data = json.loads(text_res)
+        extracted = data.get("extracted_clauses", [])
+        
+        # Add page number to each clause
+        for item in extracted:
+            item["page_number"] = page_number
+        return extracted
+    except Exception as e:
+        logger.error(f"Error extracting clauses from page {page_number}: {e}")
+        return []
+
+
+async def extract_and_chunk_pdf_document(pages_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Runs structured clause extraction page-by-page in parallel.
+    Falls back to RecursiveTextSplitter for pages where extraction fails or returns no chunks, 
+    guaranteeing that all page text is indexed.
+    """
+    import asyncio
+    from app.services.pdf_service import RecursiveTextSplitter
+    
+    logger.info(f"Extracting structured clauses from {len(pages_data)} pages...")
+    
+    # Run page extraction in parallel with a semaphore to avoid rate limit spikes
+    semaphore = asyncio.Semaphore(5)
+    
+    async def run_with_sem(page_text: str, page_number: int):
+        async with semaphore:
+            return await extract_clauses_from_page(page_text, page_number)
+            
+    tasks = [run_with_sem(p["text"], p["page_number"]) for p in pages_data]
+    results = await asyncio.gather(*tasks)
+    
+    all_chunks = []
+    splitter = RecursiveTextSplitter(chunk_size=600, chunk_overlap=150)
+    
+    for idx, page in enumerate(pages_data):
+        page_num = page["page_number"]
+        page_clauses = results[idx]
+        
+        if page_clauses:
+            for c_idx, c in enumerate(page_clauses):
+                clause_text = c.get("exact_text", "").strip()
+                if not clause_text:
+                    continue
+                    
+                ref = c.get("clause_reference", "N/A")
+                cat = c.get("category", "General")
+                
+                # We save original exact_text in "text", and set category/clause_reference metadata
+                all_chunks.append({
+                    "text": clause_text,
+                    "clause_reference": ref,
+                    "category": cat,
+                    "metadata": {
+                        "page_number": page_num,
+                        "chunk_index": len(all_chunks)
+                    }
+                })
+        else:
+            # Fallback for pages that failed to extract structured clauses
+            logger.warning(f"Failed to extract structured clauses on page {page_num}. Falling back to text splitting.")
+            split_chunks = splitter.split_text(page["text"])
+            for split_idx, chunk_text in enumerate(split_chunks):
+                all_chunks.append({
+                    "text": chunk_text,
+                    "clause_reference": "N/A",
+                    "category": "General",
+                    "metadata": {
+                        "page_number": page_num,
+                        "chunk_index": len(all_chunks)
+                    }
+                })
+                
+    logger.info(f"Structured extraction produced {len(all_chunks)} chunks for database storage.")
+    return all_chunks
+

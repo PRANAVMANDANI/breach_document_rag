@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     MONGODB_URI: str = "mongodb://localhost:27017"
     ATLAS_SEARCH_INDEX: str = "search_index"
     ATLAS_VECTOR_INDEX: str = "vector_index"
+    
+    # Web Search Settings
+    TAVILY_API_KEY: str = ""
+
 
 
     # Configuration for loading from .env

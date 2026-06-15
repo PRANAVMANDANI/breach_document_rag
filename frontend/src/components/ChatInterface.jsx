@@ -19,7 +19,7 @@ export default function ChatInterface({ apiBaseUrl, selectedDocId, documents }) 
       sender: 'bot',
       text: selectedDocId 
         ? "Hi, I am Sara. I've loaded this document context. Ask me anything about it!"
-        : "Hi, I am Sara. I've loaded your global knowledge base. Ask me any question across all processed documents!",
+        : "Hi, I am Sara, your AI legal assistant. Please upload a contract PDF to begin the automated legal risk audit.",
       sources: []
     }
   ];
@@ -32,7 +32,7 @@ export default function ChatInterface({ apiBaseUrl, selectedDocId, documents }) 
           sender: 'bot',
           text: selectedDocId 
             ? "Hi, I am Sara. I've loaded this document context. Ask me anything about it!"
-            : "Hi, I am Sara. I've loaded your global knowledge base. Ask me any question across all processed documents!",
+            : "Hi, I am Sara, your AI legal assistant. Please upload a contract PDF to begin the automated legal risk audit.",
           sources: []
         }
       ];
@@ -66,7 +66,7 @@ export default function ChatInterface({ apiBaseUrl, selectedDocId, documents }) 
           sender: 'bot',
           text: selectedDocId 
             ? "Hi, I am Sara. I've loaded this document context. Ask me anything about it!"
-            : "Hi, I am Sara. I've loaded your global knowledge base. Ask me any question across all processed documents!",
+            : "Hi, I am Sara, your AI legal assistant. Please upload a contract PDF to begin the automated legal risk audit.",
           sources: []
         }
       ]
@@ -179,7 +179,7 @@ export default function ChatInterface({ apiBaseUrl, selectedDocId, documents }) 
   };
 
   const getSelectedDocName = () => {
-    if (!selectedDocId) return "All Documents (Global)";
+    if (!selectedDocId) return "No Document Selected";
     const doc = documents.find(d => d.id === selectedDocId);
     return doc ? (doc.title || doc.filename) : "Selected Document";
   };
@@ -188,7 +188,7 @@ export default function ChatInterface({ apiBaseUrl, selectedDocId, documents }) 
     <div className="flex-1 flex flex-col md:flex-row gap-4 h-[calc(100vh-12rem)] lg:h-full lg:min-h-0 min-h-[480px]">
       
       {/* Chat Area */}
-      <div className="flex-1 glass-panel flex flex-col h-full overflow-hidden transition-colors duration-300">
+      <div className="flex-1 flex flex-col h-full overflow-hidden transition-colors duration-300">
         
         {/* Chat Header */}
         <div className="bg-claude-sidebar/60 border-b border-claude-border/80 px-4 py-3 flex items-center justify-between shrink-0 transition-colors duration-300">
@@ -297,9 +297,7 @@ export default function ChatInterface({ apiBaseUrl, selectedDocId, documents }) 
               placeholder={
                 documents.length === 0 
                   ? "Upload a document to begin..."
-                  : selectedDocId 
-                    ? "Ask a question about the active document..." 
-                    : "Ask a question across all documents..."
+                  : "Ask a question about the active document..."
               }
               disabled={loading || documents.length === 0}
               className="flex-1 bg-claude-card border border-claude-border focus:border-claude-accent/60 rounded-xl px-4 py-3 text-sm text-claude-text-primary placeholder-claude-text-secondary/60 outline-none transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed focus:ring-1 focus:ring-claude-accent/25"
