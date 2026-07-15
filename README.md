@@ -7,7 +7,6 @@
 ![MongoDB](https://img.shields.io/badge/MongoDB-Atlas-47A248?style=flat&logo=mongodb&logoColor=white)
 ![LangChain](https://img.shields.io/badge/LangChain-0.3-1C3C3C?style=flat)
 ![Tavily](https://img.shields.io/badge/Tavily-SearchAPI-blue?style=flat)
-![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=flat&logo=docker&logoColor=white)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat)](LICENSE)
 
 BREACH is an agentic, production-grade **Retrieval-Augmented Generation (RAG)** system and legal contract risk auditor. It classifies uploaded documents, automatically extracts and catalogs contractual clauses, evaluates key legal risk categories (e.g., Liability, Indemnity, Confidentiality, Intellectual Property) using structured LLM checklists, fetches real-world precedents/compliance guidance from the web via **Tavily Search**, compiles a **Safety Score**, and outputs a polished, downloadable **PDF Audit Report**.
@@ -81,9 +80,8 @@ graph TD
 
 ### **Infra**
 *   **GitHub Actions**: CI runs backend tests (pytest), linting (ruff), and frontend linting/build on every push.
-*   **Render**: Blueprint (`render.yaml`) for one-click backend deployment (native Python, no Docker required).
+*   **Render**: Blueprint (`render.yaml`) for one-click backend deployment (native Python).
 *   **Vercel**: Zero-config static hosting for the Vite/React frontend.
-*   **Docker** *(optional)*: `backend/Dockerfile`, `frontend/Dockerfile`, and `docker-compose.yml` are included for anyone who wants to containerize this locally, but nothing above depends on them.
 
 ---
 
@@ -177,7 +175,7 @@ npm run build
 
 ## 🚢 Deployment
 
-Backend on **Render** (native Python, no Docker), frontend on **Vercel**. Neither requires anything installed locally beyond a browser.
+Backend on **Render** (native Python), frontend on **Vercel**. Neither requires anything installed locally beyond a browser.
 
 ### Backend → Render
 1. Push this repo to GitHub (see below).
@@ -195,8 +193,6 @@ Backend on **Render** (native Python, no Docker), frontend on **Vercel**. Neithe
 Both env values reference each other's URLs, which don't exist until first deploy — so this is a one-time fixup once both are live:
 - On Render, update `breach-backend`'s `CORS_ORIGINS` env var to `["https://<your-vercel-url>"]`.
 - On Vercel, double-check `VITE_API_URL` matches the real Render URL, then trigger a redeploy (Vite bakes it in at build time, so a plain env var change alone won't take effect until rebuilt).
-
-`backend/Dockerfile`, `frontend/Dockerfile`, and `docker-compose.yml` are still in the repo if you ever want to containerize this instead — but nothing above requires Docker.
 
 ---
 

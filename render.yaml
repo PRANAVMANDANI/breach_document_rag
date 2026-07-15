@@ -1,7 +1,7 @@
 # Render Blueprint — https://render.com/docs/blueprint-spec
 # Deploy: Render dashboard -> New -> Blueprint -> select this repo.
 # Render finds this file automatically and provisions the backend below.
-# Runs natively (no Docker) — Render installs requirements.txt and runs uvicorn directly.
+# Runs natively — Render installs requirements.txt and runs uvicorn directly.
 #
 # The frontend is deployed separately on Vercel (see README's Deployment section) —
 # Vite bakes VITE_API_URL in at build time, and Vercel's zero-config static/SPA
