@@ -1,6 +1,6 @@
 # BREACH: AI-Powered Contract Risk Auditor & Q&A Agent
 
-![CI](https://github.com/PRANAVMANDANI/askpdf-document-rag-intelligence/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/PRANAVMANDANI/breach_document_rag/actions/workflows/ci.yml/badge.svg)
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat&logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688?style=flat&logo=fastapi&logoColor=white)
 ![React](https://img.shields.io/badge/React-19-61DAFB?style=flat&logo=react&logoColor=black)
