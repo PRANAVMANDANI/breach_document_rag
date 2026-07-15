@@ -20,4 +20,4 @@ def test_default_settings_load_without_env_file():
     settings = Settings(_env_file=None)
     assert settings.LLM_PROVIDER == "groq"
     assert settings.PORT == 8000
-    assert settings.MAX_UPLOAD_SIZE_MB == 20
+    assert settings.MAX_UPLOAD_SIZE_MB == 10

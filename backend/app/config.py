@@ -32,7 +32,10 @@ class Settings(BaseSettings):
     TAVILY_API_KEY: str = ""
 
     # Upload Limits
-    MAX_UPLOAD_SIZE_MB: int = 20
+    # Matches the frontend's own self-imposed 10MB cap (DocumentUpload.jsx) -
+    # a larger backend limit would let a request that skips the UI push a
+    # document big enough to OOM the 512MB Render free instance.
+    MAX_UPLOAD_SIZE_MB: int = 10
 
     # Anonymous session isolation: each visitor's documents/chunks are tagged
     # with a per-browser-tab session id and hard-expire after this many hours.

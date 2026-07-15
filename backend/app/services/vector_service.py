@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import math
+import os
 import re
 from datetime import datetime
 from typing import List, Dict, Any, Optional
@@ -15,12 +16,20 @@ _local_embedder = None
 def get_local_embedder():
     """
     Lazily initializes the fastembed model on first use.
+
+    threads=1 caps onnxruntime's internal thread pool - on Render's free tier
+    (0.1 shared CPU), the default unbounded thread pool oversubscribes the CPU
+    without buying any real parallelism, so this avoids that waste. It must be
+    set before fastembed's first import, since onnxruntime reads OMP_NUM_THREADS
+    at native-library init time.
     """
     global _local_embedder
     if _local_embedder is None:
+        os.environ.setdefault("OMP_NUM_THREADS", "1")
+        os.environ.setdefault("OMP_WAIT_POLICY", "PASSIVE")
         from fastembed import TextEmbedding
         # BAAI/bge-small-en-v1.5 has 384 dimensions and is extremely fast and accurate
-        _local_embedder = TextEmbedding()
+        _local_embedder = TextEmbedding(threads=1)
     return _local_embedder
 
 async def get_embeddings(texts: List[str], is_query: bool = False) -> List[List[float]]:
@@ -49,12 +58,20 @@ async def store_document_chunks(
     start_progress: int = 0
 ) -> int:
     """
-    Generates embeddings in batches of 100 and saves them in MongoDB.
+    Generates embeddings in small batches and saves them in MongoDB.
+
+    Batch size is a direct memory/request-count tradeoff: measured against the
+    real model, a batch of 100 chunks holds ~28MB of intermediate embedding
+    output in memory at once versus ~13MB for a batch of 25 - on Render's
+    512MB free tier (where the model itself already takes ~215MB just to load),
+    that difference is the gap between fitting and OOM-crashing on a large
+    document. 25 trades a few more (cheap, local) round-trips to Mongo for a
+    meaningfully lower peak.
     """
     if not chunks:
         return 0
 
-    batch_size = 100
+    batch_size = 25
     total_stored = 0
     total_chunks = len(chunks)
     doc_obj_id = ObjectId(document_id)
