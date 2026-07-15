@@ -1,13 +1,15 @@
 import React from 'react';
 import { Trash2, FileText, CheckCircle2, AlertCircle, Loader2, Sparkles } from 'lucide-react';
 
-export default function DocumentList({ 
-  documents, 
-  selectedDocId, 
-  onSelectDocument, 
+export default function DocumentList({
+  documents,
+  selectedDocId,
+  onSelectDocument,
   onDeleteDocument,
-  apiBaseUrl 
+  apiBaseUrl
 }) {
+  const [confirmDeleteId, setConfirmDeleteId] = React.useState(null);
+  const [deleteError, setDeleteError] = React.useState(null);
 
   const formatBytes = (bytes) => {
     if (bytes === 0) return '0 Bytes';
@@ -27,37 +29,53 @@ export default function DocumentList({
     });
   };
 
-  const handleDelete = async (e, id) => {
+  const requestDelete = (e, id) => {
     e.stopPropagation(); // Prevent selecting the document when clicking delete
-    if (window.confirm("Are you sure you want to delete this document and all its text embeddings?")) {
-      try {
-        const response = await fetch(`${apiBaseUrl}/documents/${id}`, {
-          method: "DELETE"
-        });
-        if (response.ok) {
-          onDeleteDocument(id);
-        } else {
-          alert("Failed to delete document.");
-        }
-      } catch (err) {
-        console.error("Error deleting document:", err);
-        alert("An error occurred while deleting the document.");
+    setDeleteError(null);
+    setConfirmDeleteId(id);
+  };
+
+  const cancelDelete = (e) => {
+    e.stopPropagation();
+    setConfirmDeleteId(null);
+  };
+
+  const confirmDelete = async (e, id) => {
+    e.stopPropagation();
+    setConfirmDeleteId(null);
+    try {
+      const response = await fetch(`${apiBaseUrl}/documents/${id}`, {
+        method: "DELETE"
+      });
+      if (response.ok) {
+        onDeleteDocument(id);
+      } else {
+        setDeleteError("Failed to delete document. Please try again.");
       }
+    } catch (err) {
+      console.error("Error deleting document:", err);
+      setDeleteError("An error occurred while deleting the document.");
     }
   };
 
   return (
     <div className="glass-panel p-6 flex flex-col h-full lg:h-auto lg:flex-1 lg:min-h-0 transition-colors duration-300">
       <div className="flex items-center justify-between mb-4 shrink-0">
-        <h2 className="font-outfit text-lg font-bold text-claude-text-primary flex items-center space-x-2">
+        <h2 className="font-display text-lg font-bold text-claude-text-primary flex items-center space-x-2">
           <FileText className="h-5 w-5 text-claude-accent" />
-          <span>Knowledge Base</span>
+          <span>Case Docket</span>
         </h2>
-        <span className="text-xs bg-claude-sidebar border border-claude-border text-claude-text-secondary px-2 py-0.5 rounded-full font-mono transition-colors duration-300">
-          {documents.length} files
+        <span className="breach-label bg-claude-sidebar border border-claude-border px-2 py-1 rounded-md transition-colors duration-300">
+          {documents.length} {documents.length === 1 ? 'file' : 'files'}
         </span>
       </div>
 
+      {deleteError && (
+        <div className="mb-3 flex items-start space-x-2 p-2.5 rounded-lg bg-rose-500/5 border border-rose-500/20 text-rose-600 dark:text-rose-400 text-xs shrink-0">
+          <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+          <span>{deleteError}</span>
+        </div>
+      )}
 
       {/* Document List */}
       <div className="flex-1 overflow-y-auto space-y-2 lg:max-h-none pr-1">
@@ -77,9 +95,19 @@ export default function DocumentList({
               <div
                 key={doc.id}
                 onClick={() => !isProcessing && onSelectDocument(doc.id)}
-                className={`group flex items-center justify-between p-3 rounded-xl border transition-all duration-200 ${
-                  isProcessing 
-                    ? "opacity-60 cursor-not-allowed border-claude-border bg-claude-sidebar/10" 
+                role="button"
+                tabIndex={isProcessing ? -1 : 0}
+                aria-disabled={isProcessing}
+                aria-current={isSelected ? "true" : undefined}
+                onKeyDown={(e) => {
+                  if (!isProcessing && (e.key === 'Enter' || e.key === ' ')) {
+                    e.preventDefault();
+                    onSelectDocument(doc.id);
+                  }
+                }}
+                className={`group flex items-center justify-between p-3 rounded-xl border transition-all duration-200 outline-none focus-visible:ring-2 focus-visible:ring-claude-accent ${
+                  isProcessing
+                    ? "opacity-60 cursor-not-allowed border-claude-border bg-claude-sidebar/10"
                     : isSelected
                       ? "border-claude-accent bg-claude-accent-bg text-claude-accent font-semibold"
                       : "border-claude-border bg-claude-sidebar/20 hover:border-claude-border hover:bg-claude-sidebar/40 cursor-pointer text-claude-text-primary"
@@ -144,9 +172,9 @@ export default function DocumentList({
                     <div className="flex items-center space-x-1">
                       {doc.has_audit && doc.audit_score !== undefined && doc.audit_score !== null ? (
                         <div className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
-                          doc.audit_score >= 80 
-                            ? 'bg-emerald-500/5 border-emerald-500/20 text-emerald-600 dark:text-emerald-400' 
-                            : doc.audit_score >= 50
+                          doc.audit_score >= 85
+                            ? 'bg-emerald-500/5 border-emerald-500/20 text-emerald-600 dark:text-emerald-400'
+                            : doc.audit_score >= 60
                               ? 'bg-amber-500/5 border-amber-500/20 text-amber-600 dark:text-amber-400'
                               : 'bg-rose-500/5 border-rose-500/20 text-rose-600 dark:text-rose-400'
                         }`}>
@@ -162,13 +190,30 @@ export default function DocumentList({
                   )}
 
                   {/* Delete Button */}
-                  <button
-                    onClick={(e) => handleDelete(e, doc.id)}
-                    className="p-1.5 rounded-lg text-claude-text-secondary hover:text-rose-500 hover:bg-rose-500/5 border border-transparent hover:border-rose-500/10 cursor-pointer transition-all duration-200"
-                    title="Delete document"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
+                  {confirmDeleteId === doc.id ? (
+                    <div className="flex items-center space-x-1">
+                      <button
+                        onClick={(e) => confirmDelete(e, doc.id)}
+                        className="px-2 py-1 rounded-lg text-[10px] font-semibold bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20 hover:bg-rose-500/20 cursor-pointer transition-all duration-200"
+                      >
+                        Confirm
+                      </button>
+                      <button
+                        onClick={cancelDelete}
+                        className="px-2 py-1 rounded-lg text-[10px] font-semibold text-claude-text-secondary border border-claude-border hover:bg-claude-sidebar/40 cursor-pointer transition-all duration-200"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={(e) => requestDelete(e, doc.id)}
+                      className="p-1.5 rounded-lg text-claude-text-secondary hover:text-rose-500 hover:bg-rose-500/5 border border-transparent hover:border-rose-500/10 cursor-pointer transition-all duration-200"
+                      title="Delete document"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  )}
                 </div>
               </div>
             );

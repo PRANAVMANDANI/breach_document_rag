@@ -1,0 +1,13 @@
+.venv
+__pycache__
+**/__pycache__
+*.pyc
+.env
+.env.*
+!.env.example
+uploads/*
+tests
+.pytest_cache
+verify.py
+verify_audit.py
+verify_hybrid.py

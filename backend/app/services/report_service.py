@@ -4,9 +4,8 @@ from datetime import datetime
 from typing import Dict, Any
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import inch
 
 logger = logging.getLogger("app.report_service")
 
@@ -93,7 +92,7 @@ def generate_audit_pdf(audit_data: Dict[str, Any], doc_filename: str) -> io.Byte
     story = []
     
     # --- PAGE 1: Header ---
-    story.append(Paragraph("LegalEagle Compliance Audit Report", title_style))
+    story.append(Paragraph("BREACH Compliance Audit Report", title_style))
     story.append(Paragraph(f"Document Audited: <b>{doc_filename}</b>", body_style))
     story.append(Paragraph(f"Audit Executed on: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}", meta_style))
     story.append(Spacer(1, 15))
@@ -102,19 +101,27 @@ def generate_audit_pdf(audit_data: Dict[str, Any], doc_filename: str) -> io.Byte
     score = audit_data.get("overall_score", 100)
     summary_text = audit_data.get("summary", "No summary available.")
     
-    # Determine color theme based on score
-    if score >= 80:
+    # Determine color theme based on score.
+    # These bands must match the scoring rubric the LLM is instructed to use in
+    # agent_service.py's synthesis prompt (85/60/30 cutoffs) - they previously
+    # used different cutoffs (80/50), so a contract could be labeled e.g. "MEDIUM"
+    # by the LLM's own summary while this report colored it green/"LOW".
+    if score >= 85:
         score_color = colors.HexColor('#16a34a')      # Green 600
         score_text = "LOW RISK - SAFE"
         card_bg = colors.HexColor('#f0fdf4')          # Green 50
-    elif score >= 50:
+    elif score >= 60:
         score_color = colors.HexColor('#ea580c')      # Orange 600
         score_text = "MEDIUM RISK - WARNING"
         card_bg = colors.HexColor('#fff7ed')          # Orange 50
-    else:
+    elif score >= 30:
         score_color = colors.HexColor('#dc2626')      # Red 600
         score_text = "HIGH RISK - DANGER"
         card_bg = colors.HexColor('#fef2f2')          # Red 50
+    else:
+        score_color = colors.HexColor('#7f1d1d')      # Red 900
+        score_text = "CRITICAL RISK - DO NOT SIGN"
+        card_bg = colors.HexColor('#fee2e2')          # Red 100
         
     score_p_style = ParagraphStyle(
         'ScoreP',
@@ -252,7 +259,7 @@ def generate_audit_pdf(audit_data: Dict[str, Any], doc_filename: str) -> io.Byte
             
     # --- Footer / Disclaimer ---
     story.append(Spacer(1, 20))
-    story.append(Paragraph("<b>Disclaimer:</b> This report is generated autonomously by an AI compliance agent using document RAG technology and the Brave Search Web API. It represents semantic risk analysis for guidance purposes and does not constitute formal legal counsel. For critical transactions, please consult with a certified legal advocate.", meta_style))
+    story.append(Paragraph("<b>Disclaimer:</b> This report is generated autonomously by an AI compliance agent using document RAG technology and the Tavily Search API. It represents semantic risk analysis for guidance purposes and does not constitute formal legal counsel. For critical transactions, please consult with a certified legal advocate.", meta_style))
     
     # Compile
     doc.build(story)

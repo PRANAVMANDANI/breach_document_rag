@@ -1,44 +1,59 @@
 @import "tailwindcss";
 
+/*
+  BREACH design system
+  ---------------------
+  A forensic, editorial look: ink neutrals, a single signal-red accent (the
+  "redline"), sharp panels, and a faint evidence-grid backdrop. Deliberately
+  restrained — one accent, real texture, no rainbow gradients.
+  Token names are kept under the `claude-*` prefix so existing markup keeps
+  working; only their *values* define the new identity.
+*/
+
 :root {
-  /* Claude Light Mode Colors - Cozy Low-Glare Paper Theme */
-  --claude-bg: #f3efe6;
-  --claude-sidebar: #e5e0d2;
-  --claude-border: rgba(25, 25, 25, 0.18); /* Defined light black border */
-  --claude-text-primary: #1e1e1a;
-  --claude-text-secondary: #5c5950;
-  --claude-accent: #cc624c;
-  --claude-accent-hover: #b8523d;
-  --claude-accent-bg: rgba(204, 98, 76, 0.08);
-  --claude-card: #faf9f5; /* Soft, warm off-white */
-  --claude-glow: radial-gradient(circle at 50% 50%, rgba(204, 98, 76, 0.04) 0%, rgba(229, 224, 210, 0.15) 50%, transparent 100%);
-  --claude-selection: rgba(204, 98, 76, 0.2);
+  /* Light — "paper dossier" */
+  --claude-bg: #f4f2ec;
+  --claude-sidebar: #e9e6dd;
+  --claude-border: rgba(24, 22, 20, 0.14);
+  --claude-border-strong: rgba(24, 22, 20, 0.26);
+  --claude-text-primary: #17150f;
+  --claude-text-secondary: #6a655c;
+  --claude-accent: #cf3336;
+  --claude-accent-hover: #b02629;
+  --claude-accent-bg: rgba(207, 51, 54, 0.08);
+  --claude-card: #fbfaf6;
+  --claude-selection: rgba(207, 51, 54, 0.22);
+  --claude-grid: rgba(24, 22, 20, 0.045);
 }
 
 .dark {
-  /* Claude Dark Mode Colors */
-  --claude-bg: #191919;
-  --claude-sidebar: #222222;
-  --claude-border: #383838; /* Slightly lighter, distinct borders in dark mode */
-  --claude-text-primary: #f1ece4;
-  --claude-text-secondary: #a19d96;
-  --claude-accent: #e05c3d;
-  --claude-accent-hover: #f06c4d;
-  --claude-accent-bg: rgba(224, 92, 61, 0.15);
-  --claude-card: #1f1f1f;
-  --claude-glow: radial-gradient(circle at 50% 50%, rgba(224, 92, 61, 0.08) 0%, rgba(31, 31, 31, 0.15) 50%, transparent 100%);
-  --claude-selection: rgba(224, 92, 61, 0.3);
+  /* Dark — "ink & redline" (default) */
+  --claude-bg: #0d0d0f;
+  --claude-sidebar: #151519;
+  --claude-border: #26262d;
+  --claude-border-strong: #34343d;
+  --claude-text-primary: #f1efe9;
+  --claude-text-secondary: #97969f;
+  --claude-accent: #e5484d;
+  --claude-accent-hover: #f2585d;
+  --claude-accent-bg: rgba(229, 72, 77, 0.14);
+  --claude-card: #17171b;
+  --claude-selection: rgba(229, 72, 77, 0.32);
+  --claude-grid: rgba(255, 255, 255, 0.028);
 }
 
 @theme {
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
-  --font-outfit: 'Outfit', system-ui, sans-serif;
+  --font-outfit: 'Space Grotesk', system-ui, sans-serif;   /* display / wordmark */
+  --font-display: 'Space Grotesk', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
   --animate-pulse-slow: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-  
-  /* Bind Claude Variables to Tailwind Utility Colors */
+
+  /* Bind BREACH variables to Tailwind utility colors */
   --color-claude-bg: var(--claude-bg);
   --color-claude-sidebar: var(--claude-sidebar);
   --color-claude-border: var(--claude-border);
+  --color-claude-border-strong: var(--claude-border-strong);
   --color-claude-text-primary: var(--claude-text-primary);
   --color-claude-text-secondary: var(--claude-text-secondary);
   --color-claude-accent: var(--claude-accent);
@@ -52,35 +67,51 @@ body {
   selection-background-color: var(--claude-selection);
 }
 
-/* Custom scrollbars matching Claude aesthetic */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+/* Evidence-grid backdrop — fine, low-contrast, replaces the blurry AI-slop glows */
+.breach-grid {
+  background-image:
+    linear-gradient(var(--claude-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--claude-grid) 1px, transparent 1px);
+  background-size: 32px 32px;
+  -webkit-mask-image: radial-gradient(ellipse 90% 70% at 50% 0%, #000 30%, transparent 100%);
+          mask-image: radial-gradient(ellipse 90% 70% at 50% 0%, #000 30%, transparent 100%);
 }
-::-webkit-scrollbar-track {
-  @apply bg-claude-bg;
+
+/* A single restrained accent wash near the header, not a floating orb */
+.breach-accent-wash {
+  background: radial-gradient(60% 100% at 50% 0%, var(--claude-accent-bg) 0%, transparent 70%);
 }
+
+/* Custom scrollbars */
+::-webkit-scrollbar { width: 7px; height: 7px; }
+::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  @apply bg-claude-border/80 rounded-full hover:bg-claude-text-secondary/30 transition-colors;
+  @apply bg-claude-border-strong rounded-full;
 }
+::-webkit-scrollbar-thumb:hover { @apply bg-claude-text-secondary/50; }
 
-/* Soft ambient glow radial backgrounds */
-.ambient-glow {
-  background: var(--claude-glow);
-  filter: blur(80px);
-}
-
-/* Redefined Clean Cards */
+/* Panels — squarer, sharper "dossier" cards */
 .glass-panel {
-  @apply bg-claude-card border border-claude-border rounded-2xl shadow-sm;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  @apply bg-claude-card border border-claude-border rounded-xl;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05), 0 8px 24px -18px rgba(0, 0, 0, 0.4);
+  transition: border-color 0.25s ease, box-shadow 0.25s ease;
 }
-
 .glass-panel-hover {
-  @apply hover:border-claude-accent/30 hover:shadow-md hover:shadow-claude-accent/2;
+  @apply hover:border-claude-border-strong;
 }
 
-/* Markdown parsing output container */
+/* Monospace forensic label — small caps, tracked out */
+.breach-label {
+  @apply font-mono text-[10px] uppercase tracking-[0.18em] text-claude-text-secondary;
+}
+
+/* Section rule with a leading accent tick */
+.breach-rule::before {
+  content: "";
+  @apply inline-block h-3 w-[3px] rounded-full bg-claude-accent mr-2 align-middle;
+}
+
+/* Markdown output */
 .markdown-content p {
   @apply mb-4 leading-relaxed text-claude-text-primary;
 }
@@ -94,6 +125,5 @@ body {
   @apply px-1.5 py-0.5 rounded bg-claude-sidebar font-mono text-sm text-claude-accent;
 }
 .markdown-content blockquote {
-  @apply pl-4 border-l-4 border-claude-accent bg-claude-sidebar py-1 pr-2 rounded-r my-4 italic text-claude-text-secondary;
+  @apply pl-4 border-l-2 border-claude-accent bg-claude-sidebar py-1 pr-2 rounded-r my-4 italic text-claude-text-secondary;
 }
-

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Navbar from './components/Navbar';
 import DocumentUpload from './components/DocumentUpload';
 import DocumentList from './components/DocumentList';
@@ -10,10 +10,20 @@ import { Shield, Bot } from 'lucide-react';
 // Backend endpoint configuration. Standard dev is localhost:8000/api
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
+if (import.meta.env.PROD && !import.meta.env.VITE_API_URL) {
+  // A deployed build with no VITE_API_URL silently points at the visitor's own
+  // localhost and will never reach the real backend - surface that loudly.
+  console.error(
+    'VITE_API_URL is not set in this production build. The app will try to reach ' +
+    'http://localhost:8000/api, which will fail for every real visitor.'
+  );
+}
+
 export default function App() {
   const [documents, setDocuments] = useState([]);
   const [selectedDocId, setSelectedDocId] = useState(null);
   const [connectionStatus, setConnectionStatus] = useState('checking');
+  const fetchRequestIdRef = useRef(0);
   const [activeWorkspaceTab, setActiveWorkspaceTab] = useState('dashboard');
   const [theme, setTheme] = useState(() => {
     return localStorage.getItem('theme') || 'dark';
@@ -39,7 +49,7 @@ export default function App() {
         } else {
           setConnectionStatus('disconnected');
         }
-      } catch (err) {
+      } catch {
         setConnectionStatus('disconnected');
       }
     };
@@ -52,17 +62,27 @@ export default function App() {
 
   // 2. Fetch the initial list of documents
   const fetchDocuments = async (isInitial = false) => {
+    // Guards against an older, slower poll response landing after a newer one
+    // and overwriting fresher state with stale data.
+    const requestId = ++fetchRequestIdRef.current;
     try {
       const response = await fetch(`${API_BASE_URL}/documents/`);
+      if (requestId !== fetchRequestIdRef.current) return;
+
       if (response.ok) {
         const data = await response.json();
         setDocuments(data);
         if (isInitial && data.length > 0) {
           setSelectedDocId(data[0].id);
         }
+      } else {
+        console.error(`Failed to fetch documents: HTTP ${response.status}`);
+        setConnectionStatus('disconnected');
       }
     } catch (err) {
+      if (requestId !== fetchRequestIdRef.current) return;
       console.error("Error fetching documents:", err);
+      setConnectionStatus('disconnected');
     }
   };
 
@@ -103,10 +123,10 @@ export default function App() {
 
   return (
     <div className="relative min-h-screen lg:h-screen bg-claude-bg text-claude-text-primary overflow-hidden flex flex-col font-sans">
-      
-      {/* Ambient background glows for glassmorphic visual enhancement */}
-      <div className="absolute top-0 left-1/4 w-[500px] h-[500px] ambient-glow pointer-events-none" />
-      <div className="absolute bottom-10 right-1/4 w-[500px] h-[500px] ambient-glow pointer-events-none" />
+
+      {/* Forensic evidence-grid backdrop + a single restrained accent wash near the header */}
+      <div className="absolute inset-0 breach-grid pointer-events-none" />
+      <div className="absolute inset-x-0 top-0 h-72 breach-accent-wash pointer-events-none" />
 
       {/* Main Brand Header */}
       <Navbar connectionStatus={connectionStatus} theme={theme} setTheme={setTheme} />
@@ -134,28 +154,34 @@ export default function App() {
         <div className="flex-1 flex flex-col min-w-0 lg:h-full overflow-hidden glass-panel transition-colors duration-300">
           
           {/* Workspace Tabs */}
-          <div className="flex bg-claude-sidebar/40 border-b border-claude-border p-1.5 shrink-0 transition-colors duration-300">
+          <div className="flex bg-claude-sidebar/40 border-b border-claude-border shrink-0 transition-colors duration-300">
             <button
               onClick={() => setActiveWorkspaceTab('dashboard')}
-              className={`flex-1 py-2.5 text-xs font-bold font-outfit rounded-xl cursor-pointer transition-all duration-200 flex items-center justify-center gap-2 outline-none ${
+              className={`relative flex-1 py-3.5 text-[11px] font-semibold font-mono uppercase tracking-[0.14em] cursor-pointer transition-colors duration-200 flex items-center justify-center gap-2 outline-none ${
                 activeWorkspaceTab === 'dashboard'
-                  ? 'bg-claude-card text-claude-accent border border-claude-border shadow-sm'
+                  ? 'text-claude-accent'
                   : 'text-claude-text-secondary hover:text-claude-text-primary'
               }`}
             >
               <Shield className="h-4 w-4" />
-              <span>Compliance Audit Dashboard</span>
+              <span>Risk Audit</span>
+              {activeWorkspaceTab === 'dashboard' && (
+                <span className="absolute inset-x-0 -bottom-px h-0.5 bg-claude-accent" />
+              )}
             </button>
             <button
               onClick={() => setActiveWorkspaceTab('chat')}
-              className={`flex-1 py-2.5 text-xs font-bold font-outfit rounded-xl cursor-pointer transition-all duration-200 flex items-center justify-center gap-2 outline-none ${
+              className={`relative flex-1 py-3.5 text-[11px] font-semibold font-mono uppercase tracking-[0.14em] cursor-pointer transition-colors duration-200 flex items-center justify-center gap-2 outline-none ${
                 activeWorkspaceTab === 'chat'
-                  ? 'bg-claude-card text-claude-accent border border-claude-border shadow-sm'
+                  ? 'text-claude-accent'
                   : 'text-claude-text-secondary hover:text-claude-text-primary'
               }`}
             >
               <Bot className="h-4 w-4" />
-              <span>Sara AI Q&A Assistant</span>
+              <span>Ask Sara</span>
+              {activeWorkspaceTab === 'chat' && (
+                <span className="absolute inset-x-0 -bottom-px h-0.5 bg-claude-accent" />
+              )}
             </button>
           </div>
 
@@ -169,9 +195,10 @@ export default function App() {
                 />
               ) : (
                 <div className="flex flex-col items-center justify-center h-full text-center text-claude-text-secondary p-8 transition-colors duration-300">
-                  <Shield className="h-12 w-12 text-claude-border mb-3 stroke-[1.5]" />
-                  <h3 className="font-outfit font-bold text-claude-text-primary text-sm mb-1">No Document Selected</h3>
-                  <p className="text-xs max-w-xs leading-relaxed">Select a contract from the list to view its legal compliance dashboard.</p>
+                  <Shield className="h-12 w-12 text-claude-border-strong mb-4 stroke-[1.5]" />
+                  <p className="breach-label mb-2">No case loaded</p>
+                  <h3 className="font-display font-bold text-claude-text-primary text-base mb-1.5">Nothing to audit yet</h3>
+                  <p className="text-xs max-w-xs leading-relaxed">Select a contract from the docket to expose its risk profile.</p>
                 </div>
               )
             ) : (

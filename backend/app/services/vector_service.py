@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import math
-import httpx
+import re
 from typing import List, Dict, Any
 from bson import ObjectId
 from app.config import settings
@@ -24,45 +24,20 @@ def get_local_embedder():
 
 async def get_embeddings(texts: List[str], is_query: bool = False) -> List[List[float]]:
     """
-    Generates embeddings for a list of texts using the selected provider (Gemini, Local, or Ollama).
+    Generates embeddings for a list of texts using fastembed (BAAI/bge-small-en-v1.5).
+    Runs in a thread pool so it never blocks the async event loop.
     """
     if not texts:
         return []
 
-    if settings.EMBEDDING_PROVIDER == "ollama":
-        try:
-            embeddings = []
-            async with httpx.AsyncClient() as client:
-                for text in texts:
-                    response = await client.post(
-                        f"{settings.OLLAMA_BASE_URL}/api/embeddings",
-                        json={
-                            "model": settings.OLLAMA_EMBEDDING_MODEL,
-                            "prompt": text
-                        },
-                        timeout=30.0
-                    )
-                    response.raise_for_status()
-                    embeddings.append(response.json()["embedding"])
-            return embeddings
-        except Exception as e:
-            logger.error(f"Ollama embedding generation failed: {e}")
-            raise RuntimeError(f"Ollama embedding failed: {str(e)}")
-            
-    elif settings.EMBEDDING_PROVIDER == "local":
-        try:
-            embedder = get_local_embedder()
-            # Offload CPU-heavy embedding calculation to a separate thread pool
-            def run_local_embedding():
-                embeddings_generator = embedder.embed(texts)
-                return [e.tolist() for e in embeddings_generator]
-            return await asyncio.to_thread(run_local_embedding)
-        except Exception as e:
-            logger.error(f"Local embedding generation failed: {e}")
-            raise RuntimeError(f"Local embedding failed: {str(e)}")
-            
-    else:
-        raise ValueError(f"Unsupported embedding provider: {settings.EMBEDDING_PROVIDER}")
+    try:
+        embedder = get_local_embedder()
+        def run_embedding():
+            return [e.tolist() for e in embedder.embed(texts)]
+        return await asyncio.to_thread(run_embedding)
+    except Exception as e:
+        logger.error(f"Embedding generation failed: {e}")
+        raise RuntimeError(f"Embedding failed: {str(e)}")
 
 
 async def store_document_chunks(document_id: str, chunks: List[Dict[str, Any]], start_progress: int = 0) -> int:
@@ -385,8 +360,10 @@ async def search_keyword_chunks(query_text: str, limit: int = 20, document_id: s
         words = [w for w in query_text.strip().split() if len(w) > 2]
         if not words:
             words = [query_text.strip()]
-        
-        regex_pattern = "|".join(words)
+
+        # Escape each term so user input can never be interpreted as regex syntax
+        # (unescaped input here was a ReDoS vector via pathological quantifier patterns).
+        regex_pattern = "|".join(re.escape(w) for w in words)
         query_filter = {}
         if document_id:
             query_filter["document_id"] = ObjectId(document_id)
@@ -492,7 +469,7 @@ async def search_similar_chunks(query_text: str, limit: int = 4, document_id: st
     return hybrid_results[:limit]
 
 
-async def wait_for_atlas_indexing(document_id: str, timeout_seconds: int = 30) -> bool:
+async def wait_for_atlas_indexing(document_id: str, timeout_seconds: int = 6) -> bool:
     """
     Waits for MongoDB Atlas Vector index to fully index all chunks of a document.
     Queries the Atlas Vector Search index repeatedly until the indexed count matches 
@@ -520,7 +497,7 @@ async def wait_for_atlas_indexing(document_id: str, timeout_seconds: int = 30) -
     logger.info(f"Atlas connection detected. Waiting for Atlas Vector Index to index all {total_stored} chunks...")
     
     start_time = asyncio.get_event_loop().time()
-    poll_interval = 1.5
+    poll_interval = 1.0
     
     while (asyncio.get_event_loop().time() - start_time) < timeout_seconds:
         pipeline = [

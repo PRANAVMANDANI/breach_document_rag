@@ -1,11 +1,10 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Send, Bot, User, Loader2, Sparkles, BookOpen, AlertCircle, RefreshCw, X, Trash2 } from 'lucide-react';
+import { useState, useRef, useEffect } from 'react';
+import { Send, Bot, User, Loader2, BookOpen, X, Trash2 } from 'lucide-react';
 
 export default function ChatInterface({ apiBaseUrl, selectedDocId, documents }) {
   const [chats, setChats] = useState({});
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [activeSources, setActiveSources] = useState([]);
   const [selectedSourceText, setSelectedSourceText] = useState(null);
   const [activeTab, setActiveTab] = useState('pdf');
   
@@ -71,7 +70,6 @@ export default function ChatInterface({ apiBaseUrl, selectedDocId, documents }) 
         }
       ]
     }));
-    setActiveSources([]);
     setSelectedSourceText(null);
   };
 
@@ -121,7 +119,6 @@ export default function ChatInterface({ apiBaseUrl, selectedDocId, documents }) 
       if (sourcesHeader) {
         try {
           sources = JSON.parse(sourcesHeader);
-          setActiveSources(sources); // Keep active sources for sidebar display
         } catch (e) {
           console.error("Error parsing sources header:", e);
         }
@@ -363,6 +360,7 @@ export default function ChatInterface({ apiBaseUrl, selectedDocId, documents }) 
                 src={`${apiBaseUrl}/documents/${selectedSourceText.document_id}/pdf#page=${selectedSourceText.page_number}`}
                 className="w-full h-full border-0 bg-claude-sidebar"
                 title="Document PDF Viewer"
+                sandbox="allow-same-origin"
               />
             </div>
           ) : (

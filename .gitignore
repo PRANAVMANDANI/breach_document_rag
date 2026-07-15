@@ -31,6 +31,7 @@ db/
 # IDE / Editor configurations
 .vscode/
 .idea/
+.claude/
 *.suo
 *.ntvs*
 *.njsproj

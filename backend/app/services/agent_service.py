@@ -7,7 +7,6 @@ from bson import ObjectId
 from pydantic import BaseModel, Field
 from app.config import settings
 from app.database import Database
-from app.services.vector_service import search_similar_chunks
 from app.services.llm_service import get_llm_client
 from langchain_core.messages import HumanMessage
 
@@ -182,93 +181,11 @@ Classify this document:
         }
 
 
-async def analyze_category_risk(
-    document_id: str, 
-    category_db_names: List[str],
-    display_name: str,
-    description: str, 
-    default_search_query: str,
-    chunks_collection
-) -> List[Dict[str, Any]]:
-    """
-    Checks if a specific risk category is present in the document by fetching the relevant 
-    categorized chunks and prompting the LLM to inspect them specifically.
-    """
-    # Fetch categorized chunks
-    cursor = chunks_collection.find({
-        "document_id": ObjectId(document_id),
-        "category": {"$in": category_db_names}
-    })
-    
-    clauses = []
-    async for chunk in cursor:
-        clauses.append(chunk)
-        
-    # Fallback to vector search if no chunks were categorized with this label
-    if not clauses:
-        from app.services.vector_service import search_similar_chunks
-        logger.info(f"No structured chunks for category {display_name}. Running vector fallback...")
-        clauses = await search_similar_chunks(query_text=display_name, limit=4, document_id=document_id)
-        
-    if not clauses:
-        return []
-        
-    # Compile text context
-    context_str = ""
-    for idx, c in enumerate(clauses):
-        page = c.get("metadata", {}).get("page_number", "Unknown") if "metadata" in c else c.get("page_number", "Unknown")
-        ref = c.get("clause_reference", "N/A")
-        text = c.get("text", "")
-        context_str += f"--- Clause Option {idx + 1} (Page {page}) [Ref: {ref}] ---\n{text}\n\n"
-        
-    prompt = f"""You are a corporate legal compliance auditor.
-Your job is to analyze the provided clauses extracted from a contract and inspect them for the risk area: "{display_name}".
-Risk Description to look for: {description}
-
-CRITICAL GROUNDING RULES:
-1. You may ONLY flag a risk if a clause is EXPLICITLY present as quoted text in the provided clauses.
-2. If the clauses do not contain any compliance warning signs, unfavorable terms, or risks for this category, you MUST return an empty list of identified_risks. Do not make up or infer any risks.
-3. You must quote the clause EXACTLY. Do not paraphrase or summarize.
-
-Respond ONLY in valid JSON format containing a list of objects.
-Example response format if a risk is found:
-{{
-  "identified_risks": [
-    {{
-      "category": "{display_name}",
-      "clause_text": "Vendor shall have unlimited liability for...",
-      "risk_description": "Imposes unlimited liability on the Vendor, creating asymmetric commercial risk.",
-      "search_query": "{default_search_query}"
-    }}
-  ]
-}}
-
-Example response format if NO risk is found:
-{{
-  "identified_risks": []
-}}
-
-Contract Clauses:
-{context_str}
-
-Respond in the exact JSON format, do not include any other text, explanations, or code blocks."""
-
-    try:
-        chat = get_llm_client(temperature=0.1)
-        response = await chat.ainvoke([HumanMessage(content=prompt)])
-        data = clean_json_response(response.content)
-        risks = data.get("identified_risks", [])
-        return risks
-    except Exception as e:
-        logger.error(f"Error checking risk category {display_name}: {e}")
-        return []
-
-
 # 4. Agentic Auditing Loop
 async def run_contract_audit(document_id: str) -> Dict[str, Any]:
     """
     Two-stage agentic contract audit runner:
-    Stage 1: Scan retrieved contract context and generate Brave search queries for suspicious clauses.
+    Stage 1: Scan retrieved contract context and generate Tavily search queries for suspicious clauses.
     Stage 2: Run searches in parallel, merge snippets, synthesize final compliance report, and compute score.
     """
     logger.info(f"Initiating Agentic Legal Audit for document {document_id}...")
@@ -302,7 +219,7 @@ async def run_contract_audit(document_id: str) -> Dict[str, Any]:
     
     if not classification.get("proceed_with_analysis", False):
         doc_type = classification.get("document_type", "UNKNOWN")
-        print(f"    [WARN] [LEGAL EAGLE] Document is not a legal contract (type: {doc_type}). Skipping compliance audit.")
+        print(f"    [WARN] [BREACH] Document is not a legal contract (type: {doc_type}). Skipping compliance audit.")
         return {
             "is_contract": False,
             "document_type": doc_type,
@@ -310,7 +227,7 @@ async def run_contract_audit(document_id: str) -> Dict[str, Any]:
             "reason": classification.get("reason", "Not classified as a contract"),
             "overall_score": 100,
             "summary": f"This document appears to be a {doc_type}, not a legal contract. "
-                       f"LegalEagle only analyzes binding legal agreements between parties.",
+                       f"BREACH only analyzes binding legal agreements between parties.",
             "risks": []
         }
     
@@ -319,97 +236,66 @@ async def run_contract_audit(document_id: str) -> Dict[str, Any]:
     # ip_assignment, termination, governing_law, arbitration, renewal.
     LEGAL_CHECKLIST = {
         "liability": {
-            "display_name": "Liability",
             "db_categories": ["Liability", "liability"],
-            "description": "Limitation of liability caps, asymmetric liability limits where one party has unlimited liability while the other is heavily capped, or liability exclusions.",
             "search_term": "standard software contract limitation of liability cap India"
         },
         "indemnification": {
-            "display_name": "Indemnification",
             "db_categories": ["Indemnification", "indemnification", "Indemnity", "indemnity"],
-            "description": "One-sided indemnification requirements, obligations to defend and hold harmless, or extreme indemnity triggers.",
             "search_term": "standard indemnity clause enforceability India"
         },
         "confidentiality": {
-            "display_name": "Confidentiality",
             "db_categories": ["Confidentiality", "confidentiality"],
-            "description": "Perpetual confidentiality durations (obligations surviving forever or indefinitely), which can be highly problematic or unenforceable in Indian law.",
             "search_term": "perpetual NDA duration enforceability India"
         },
         "non-compete": {
-            "display_name": "Non-Compete",
             "db_categories": ["Non-Compete", "non-compete", "Non-compete"],
-            "description": "Covenants in restraint of trade, geographic non-compete limits, global non-competes, or post-employment restrict covenants void under Section 27 of the Indian Contract Act.",
             "search_term": "Section 27 Indian Contract Act non-compete clause validity"
         },
         "non-solicitation": {
-            "display_name": "Non-Solicitation",
             "db_categories": ["Non-Solicitation", "non-solicitation", "Non-solicitation"],
-            "description": "Restrictions on soliciting employees, clients, or customers after termination, including duration and geographic scope.",
             "search_term": "non-solicitation clause enforceability validity India"
         },
         "ip_assignment": {
-            "display_name": "IP Assignment",
             "db_categories": ["IP Assignment", "ip_assignment", "IP assignment", "Intellectual Property", "intellectual_property"],
-            "description": "Unfavorable Intellectual property assignment, copyright transfers, proprietary patent assignment, or loss of background intellectual property.",
             "search_term": "IP assignment clause standard Indian software contract"
         },
         "termination": {
-            "display_name": "Termination",
             "db_categories": ["Termination", "termination"],
-            "description": "Unilateral termination without cause, auto-renewal notification traps (e.g. 90-day notify window), or excessive notice periods.",
             "search_term": "notice period for termination without cause standard contracts"
         },
         "governing_law": {
-            "display_name": "Governing Law",
             "db_categories": ["Governing Law", "governing_law", "Governing law", "Jurisdiction", "jurisdiction"],
-            "description": "Unfavorable choice of governing law, non-local jurisdictions, or waivers of local judicial resort.",
             "search_term": "choice of governing law validity Indian contracts"
         },
         "arbitration": {
-            "display_name": "Arbitration",
             "db_categories": ["Arbitration", "arbitration", "Dispute Resolution", "dispute_resolution", "Dispute resolution"],
-            "description": "Mandatory arbitration clauses, choice of seat and venue, split arbitration costs, and waiver of class actions or right to sue in court.",
             "search_term": "arbitration clause validity seat venue Indian arbitration act"
         },
         "renewal": {
-            "display_name": "Renewal",
             "db_categories": ["Renewal", "renewal"],
-            "description": "Auto-renewal terms, notice period for non-renewal, and pricing escalation/increase clauses upon renewal.",
             "search_term": "contract auto-renewal clause standard notice period"
         }
     }
 
-    # 1. Run structured checklist risk check in parallel
-    logger.info("Executing checklist-based risk discovery in parallel...")
-    print("[LEGAL EAGLE] Scanning contract checklist for structured risks in parallel...")
-    
-    checklist_tasks = [
-        analyze_category_risk(
-            document_id=document_id,
-            category_db_names=info["db_categories"],
-            display_name=info["display_name"],
-            description=info["description"],
-            default_search_query=info["search_term"],
-            chunks_collection=chunks_collection
-        )
-        for cat_key, info in LEGAL_CHECKLIST.items()
-    ]
-    
-    checklist_results = await asyncio.gather(*checklist_tasks)
-    
-    # Flatten and deduplicate identified risks
-    identified_risks = []
-    seen_risks = set()
-    for res in checklist_results:
-        for r in res:
-            risk_key = f"{r.get('category')}_{r.get('clause_text', '')[:50]}"
-            if risk_key not in seen_risks and r.get('clause_text'):
-                seen_risks.add(risk_key)
-                identified_risks.append(r)
-                
-    logger.info(f"Structured checklist scanning complete. Identified {len(identified_risks)} potential risks.")
-    print(f"[LEGAL EAGLE] Scan complete. Identified {len(identified_risks)} potential risk points to verify.")
+    # 1. Determine which checklist categories are actually present in this document.
+    # Clause chunks were already category-tagged during structured extraction
+    # (extract_and_chunk_pdf_document), so this is a single DB lookup with zero
+    # LLM calls, instead of the previous 10 separate per-category LLM checks
+    # (whose risk output was never even fed into the Stage 3 synthesis prompt below).
+    logger.info("Determining present risk categories via DB lookup (no LLM calls)...")
+    print("[LEGAL EAGLE] Scanning contract checklist via categorized chunks (no LLM calls)...")
+
+    present_categories = set(await chunks_collection.distinct(
+        "category", {"document_id": ObjectId(document_id)}
+    ))
+
+    search_queries = []
+    for info in LEGAL_CHECKLIST.values():
+        if present_categories.intersection(info["db_categories"]):
+            search_queries.append(info["search_term"])
+
+    logger.info(f"Checklist scan complete. {len(search_queries)} risk categories present with matching clauses.")
+    print(f"[LEGAL EAGLE] Scan complete. {len(search_queries)} risk categories present for web search lookup.")
 
     # 2. Build unified context_str for final synthesis
     all_db_categories = []
@@ -447,38 +333,38 @@ async def run_contract_audit(document_id: str) -> Dict[str, Any]:
         
     # --- STAGE 2: Execute Web Search in Parallel ---
     web_context_str = ""
-    if identified_risks and settings.TAVILY_API_KEY:
+    if search_queries and settings.TAVILY_API_KEY:
         logger.info("Executing Stage 2: Performing parallel Tavily Web Searches...")
-        print(f"[LEGAL EAGLE] Stage 2: Running parallel Tavily Web Search queries for {min(len(identified_risks), 8)} risks...")
-        search_tasks = []
-        queries_executed = []
-        
-        for risk in identified_risks[:8]:  # Limit to top 8 risks to protect API rate limits
-            query = risk.get("search_query")
-            if query:
-                search_tasks.append(TavilySearchClient.search(query))
-                queries_executed.append(query)
-                
-        if search_tasks:
-            search_results = await asyncio.gather(*search_tasks)
-            
-            for idx, res_text in enumerate(search_results):
-                web_context_str += f"=== Web Search for: '{queries_executed[idx]}' ===\n{res_text}\n\n"
-        else:
-            web_context_str = "No specific queries generated."
+        print(f"[LEGAL EAGLE] Stage 2: Running parallel Tavily Web Search queries for {min(len(search_queries), 8)} categories...")
+        tavily_semaphore = asyncio.Semaphore(4)
+
+        async def bounded_search(query: str):
+            async with tavily_semaphore:
+                return await TavilySearchClient.search(query)
+
+        queries_executed = search_queries[:8]  # Limit to top 8 categories to protect API rate limits
+        search_results = await asyncio.gather(*[bounded_search(q) for q in queries_executed])
+
+        for idx, res_text in enumerate(search_results):
+            web_context_str += f"=== Web Search for: '{queries_executed[idx]}' ===\n{res_text}\n\n"
     else:
-        logger.info("Skipping Tavily Web Search (no key configured or no risks identified).")
+        logger.info("Skipping Tavily Web Search (no key configured or no risk categories present).")
         web_context_str = "Web search is disabled. Analyzing based on default legal knowledge guidelines."
         
     # --- STAGE 3: Final Synthesis & Scoring ---
     logger.info("Executing Stage 3: LLM Synthesis and Compliance Audit Compilation...")
     
-    stage2_prompt = f"""You are a senior corporate compliance lawyer. 
+    stage2_prompt = f"""IMPORTANT: This document may contain many risky clauses.
+You MUST scan ALL clauses before stopping.
+Do not stop after finding 5 risks.
+Minimum 8 risks must be evaluated for any HIGH RISK document.
+The more HIGH severity risks found, the lower the score.
+
+You are a senior corporate compliance lawyer. 
 Review the contract file '{filename}' and compile the final legal risk audit report.
 You must combine:
 1. The raw contract text clauses.
-2. The initial risk findings.
-3. The Tavily Web Search results (precedents, enforceability rules, and standard practices under Indian law).
+2. The Tavily Web Search results (precedents, enforceability rules, and standard practices under Indian law).
 
 CRITICAL GROUNDING RULES — READ BEFORE EVERY ANALYSIS:
 
@@ -529,31 +415,72 @@ CRITICAL INSTRUCTIONS FOR RISK SCREENING:
 10. CHECK FOR ARBITRATION: Flag one-sided arbitration clauses, inconvenient seats/venues, split arbitration costs, and waiver of class actions or right to sue in court as MEDIUM risk.
 11. CHECK FOR RENEWAL: Flag auto-renewal traps, unilateral price escalation terms upon renewal, and notice duration limits as MEDIUM risk.
 
-Provide a finalized list of audit risks. 
-For each risk, assign:
-- Severity: HIGH, MEDIUM, or LOW.
-- Severity Color: "red" (HIGH), "yellow" (MEDIUM), "green" (LOW).
-- Citation: Reference specific legal precedents, Indian Contract Act sections (such as Section 27 for restraints of trade, or Section 124 for indemnity), or search results found in the provided web context.
-- Suggestion: Concrete advice on how the user should rewrite this clause.
+REPORT QUALITY REQUIREMENTS — EVERY RISK MUST INCLUDE ALL 5 ELEMENTS:
 
-Also, calculate an overall Safety Score (from 0 to 100) for the contract. 
-- 100 means completely safe/standard.
-- Less than 50 means extremely risky/one-sided contract.
-Provide a 2-3 sentence overall summary.
+1. WHAT IT SAYS — quote the clause verbatim in the clause_text field (already required ✅)
+
+2. WHAT IT MEANS IN PLAIN ENGLISH — in the explanation field, start with "This means..." and explain
+   in non-lawyer language what this clause actually does to the signing party in practice.
+   What power does it give the other party? What does the signing party lose or risk?
+
+3. WHY THIS SEVERITY — still in the explanation field, after the plain-English explanation,
+   justify exactly why you chose HIGH, MEDIUM, or LOW:
+   - HIGH   → "This is rated HIGH because this clause could result in direct financial harm,
+               personal liability of directors, or permanent loss of rights if enforced."
+   - MEDIUM → "This is rated MEDIUM because this clause creates imbalance but has limited
+               immediate financial exposure and is common in negotiation."
+   - LOW    → "This is rated LOW because it is a minor concern and a standard negotiation point."
+   Then state the worst-case scenario if the clause is enforced as written.
+
+4. INDIAN LAW CONTEXT — in the citation field, cite the SPECIFIC section of the relevant Indian
+   law (Indian Contract Act 1872, IT Act, Companies Act, etc.) and explain how Indian courts
+   have historically treated this type of clause. Reference the web search results where applicable.
+
+5. SPECIFIC REMEDIATION — in the suggestion field, give a clause-specific rewrite or negotiation
+   position. Do NOT give generic advice like "cap liability at contract value".
+   Name the specific clause number, propose exact replacement language or a concrete ask,
+   and explain what the party should insist on in negotiation.
+
+SCORING INSTRUCTIONS — FOLLOW EXACTLY, NO EXCEPTIONS:
+
+After identifying all risks, calculate the score like this:
+
+  Step 1: Start at 100
+  Step 2: For each HIGH severity risk:    subtract 15
+  Step 3: For each MEDIUM severity risk:  subtract 8
+  Step 4: For each LOW severity risk:     subtract 3
+  Step 5: Floor at 0 (score cannot go below 0)
+
+THEN assign risk label:
+  85-100  → LOW RISK - SAFE
+  60-84   → MEDIUM RISK - WARNING
+  30-59   → HIGH RISK - DANGER
+  0-29    → CRITICAL RISK - DO NOT SIGN
+
+DO NOT round up. DO NOT use judgment to override the formula.
+The formula IS the score.
+
+EXECUTIVE SUMMARY REQUIREMENTS — the summary field must be 3-4 sentences and include ALL of:
+- A one-line description of what the contract is and who it is between
+- The total count of HIGH, MEDIUM, and LOW risks found
+- A clear verdict on one of exactly three lines: "VERDICT: SIGN" / "VERDICT: NEGOTIATE" / "VERDICT: DO NOT SIGN"
+- The 2-3 most dangerous specific clause references by name/number
+- A one-sentence estimate of litigation risk if the contract is signed as-is
+Do NOT use bullet points, markdown, or score arithmetic in the summary. Write it as flowing prose.
 
 You must respond ONLY with a valid JSON document matching the following keys:
 {{
-  "overall_score": 75,
-  "summary": "Overall contract risk summary text...",
+  "overall_score": 25,
+  "summary": "OmniCore's Predatory Agreement (2024) is a heavily one-sided services contract between OmniCore Technologies and the Partner. Of the clauses reviewed, 5 are rated HIGH severity, 2 MEDIUM, and 1 LOW — exposing the Partner to unlimited personal financial liability, permanent IP forfeiture, and a 10-year global non-compete void under Indian law. VERDICT: DO NOT SIGN. Clauses 2.1 (unlimited liability), 4.1 (IP assignment), and 5.3 (non-compete) must be renegotiated before execution. If enforced as written, the contract carries significant litigation risk and would likely result in protracted disputes in courts unfavorable to the Partner.",
   "risks": [
     {{
       "category": "Liability",
-      "clause_text": "Vendor shall have unlimited liability...",
+      "clause_text": "The Partner shall bear unlimited liability for any breach of this Agreement, including consequential and indirect damages.",
       "severity": "HIGH",
       "severity_color": "red",
-      "explanation": "This clause imposes unlimited liability on you, which is highly risky...",
-      "citation": "Indian courts usually look for balanced liability caps, but unilateral clauses are enforceable if signed unless unconscionable.",
-      "suggestion": "Request to cap liability at 100% of the contract value or fees paid in the last 12 months."
+      "explanation": "This means that if the Partner breaches any part of this contract — even accidentally — the Company can sue the Partner for any amount of money with no ceiling, including the personal assets of the Partner's directors. This is rated HIGH because it could result in direct, unlimited financial harm and personal liability of company founders if enforced. In the worst case, a single data leak or missed deadline could result in a lawsuit that bankrupts the Partner entity and its founders personally.",
+      "citation": "Under Section 124 of the Indian Contract Act 1872, indemnity clauses are valid and enforceable. However, Indian courts in Kisan Sahkari Chini Mills Ltd v. Vardarajan (2005) have held that clauses imposing unconscionable or unlimited burdens on one party may be set aside under Section 23 as void against public policy. This clause would face challenge but carries litigation risk until overturned.",
+      "suggestion": "Negotiate a mutual, capped liability clause: both parties' liability should be limited to the total fees paid or payable in the 12 months preceding the breach. Specifically for Clause 2.1, propose: 'Each party's aggregate liability shall not exceed INR [X] or the total fees paid in the preceding 12 months, whichever is higher. Neither party shall be liable for indirect, consequential, or punitive damages.'"
     }}
   ]
 }}

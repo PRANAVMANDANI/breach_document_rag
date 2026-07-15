@@ -1,16 +1,19 @@
 import asyncio
 import logging
 import os
+import re
 from datetime import datetime
 from typing import List
 from bson import ObjectId
-from fastapi import APIRouter, UploadFile, File, BackgroundTasks, HTTPException, status
+from bson.errors import InvalidId
+from fastapi import APIRouter, UploadFile, File, BackgroundTasks, HTTPException, Request, status
 from fastapi.responses import FileResponse, StreamingResponse
 from app.database import Database
 from app.config import settings
+from app.rate_limiter import limiter
 from app.schemas.document import DocumentOut
-from app.services.pdf_service import extract_pages_from_pdf, chunk_pdf_document, extract_metadata_from_pdf
-from app.services.llm_service import extract_metadata_from_text, generate_chunk_context, generate_document_summary
+from app.services.pdf_service import extract_pages_from_pdf, extract_metadata_from_pdf
+from app.services.llm_service import extract_metadata_from_text, build_chunk_context, generate_document_summary
 from app.services.vector_service import store_document_chunks
 from app.services.agent_service import run_contract_audit
 from app.services.report_service import generate_audit_pdf
@@ -19,8 +22,22 @@ from app.services.report_service import generate_audit_pdf
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+MAX_UPLOAD_SIZE_BYTES = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+PDF_MAGIC_BYTES = b"%PDF-"
+
 logger = logging.getLogger("app.routes.document")
 router = APIRouter(prefix="/documents", tags=["documents"])
+
+
+def _validate_object_id(document_id: str) -> ObjectId:
+    """Validates a document_id is a well-formed ObjectId, raising a clean 400 otherwise."""
+    try:
+        return ObjectId(document_id)
+    except InvalidId:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid document ID format."
+        )
 
 async def process_pdf_background(
     document_id: str, 
@@ -37,8 +54,8 @@ async def process_pdf_background(
     try:
         documents_collection = Database.get_documents_collection()
         
-        # 1. Parse PDF and extract page-by-page text
-        pages_data = extract_pages_from_pdf(file_bytes)
+        # 1. Parse PDF and extract page-by-page text (off the event loop - can be slow for large/degenerate PDFs)
+        pages_data = await asyncio.to_thread(extract_pages_from_pdf, file_bytes)
         
         title = current_title
         author = current_author
@@ -57,56 +74,27 @@ async def process_pdf_background(
         from app.services.llm_service import extract_and_chunk_pdf_document
         chunks = await extract_and_chunk_pdf_document(pages_data)
         
-        # 2b. Generate situational contexts for chunks if enabled
+        # 2b. Generate situational contexts for chunks if enabled.
+        # Only one LLM call is made here (the overall document summary) — per-chunk
+        # context is then built deterministically from that summary plus the
+        # category/clause_reference metadata each chunk already has from structured
+        # extraction, instead of spending one LLM call per chunk.
         if chunks and generate_context:
             logger.info(f"Generating situational context for {len(chunks)} chunks using {settings.LLM_PROVIDER}...")
             whole_document = "\n".join([page["text"] for page in pages_data])
-            
-            # Generate summary first to stay under TPM rate limits
+
             logger.info("Generating overall document summary...")
             doc_summary = await generate_document_summary(whole_document)
             logger.info(f"Summary generated: '{doc_summary}'")
-            
-            semaphore = asyncio.Semaphore(5)
-            rate_limit_tripped = False
-            processed_contexts_count = 0
-            total_chunks = len(chunks)
-            last_progress = 0
-            
-            async def get_context_with_sem(chunk_text: str) -> str:
-                nonlocal rate_limit_tripped, processed_contexts_count, last_progress
-                async with semaphore:
-                    if rate_limit_tripped:
-                        return ""
-                    try:
-                        context = await generate_chunk_context(doc_summary, chunk_text)
-                        processed_contexts_count += 1
-                        progress = int((processed_contexts_count / total_chunks) * 80)
-                        if progress > last_progress:
-                            last_progress = progress
-                            await documents_collection.update_one(
-                                {"_id": ObjectId(document_id)},
-                                {"$set": {"processing_progress": progress}}
-                            )
-                        return context
-                    except Exception as e:
-                        if "429" in str(e) or "quota" in str(e).lower() or "limit" in str(e).lower():
-                            rate_limit_tripped = True
-                            logger.warning("Rate limit tripped during chunk context generation. Aborting remaining requests.")
-                        processed_contexts_count += 1
-                        progress = int((processed_contexts_count / total_chunks) * 80)
-                        if progress > last_progress:
-                            last_progress = progress
-                            await documents_collection.update_one(
-                                {"_id": ObjectId(document_id)},
-                                {"$set": {"processing_progress": progress}}
-                            )
-                        return ""
-                    
-            tasks = [get_context_with_sem(c["text"]) for c in chunks]
-            contexts = await asyncio.gather(*tasks)
-            for idx, ctx in enumerate(contexts):
-                chunks[idx]["context"] = ctx
+
+            for chunk in chunks:
+                chunk["context"] = build_chunk_context(
+                    doc_summary, chunk.get("category", "General"), chunk.get("clause_reference", "N/A")
+                )
+            await documents_collection.update_one(
+                {"_id": ObjectId(document_id)},
+                {"$set": {"processing_progress": 80}}
+            )
             logger.info("Context generation completed.")
         else:
             logger.info("Situational chunk context generation is disabled.")
@@ -118,7 +106,7 @@ async def process_pdf_background(
         try:
             # Wait dynamically for MongoDB Atlas asynchronous search indexes to synchronize
             from app.services.vector_service import wait_for_atlas_indexing
-            await wait_for_atlas_indexing(document_id, timeout_seconds=30)
+            await wait_for_atlas_indexing(document_id, timeout_seconds=6)
                 
             logger.info(f"Running automated compliance risk audit for document {document_id}...")
             audit_report = await run_contract_audit(document_id)
@@ -149,27 +137,36 @@ async def process_pdf_background(
         logger.info(f"Background processing and legal audit completed successfully for document {document_id}")
     except Exception as e:
         logger.error(f"Failed to process document {document_id} in background: {e}")
-        documents_collection = Database.get_documents_collection()
-        await documents_collection.update_one(
-            {"_id": ObjectId(document_id)},
-            {"$set": {
-                "status": "error",
-                "processing_progress": 0,
-                "error_message": str(e)
-            }}
-        )
+        try:
+            documents_collection = Database.get_documents_collection()
+            await documents_collection.update_one(
+                {"_id": ObjectId(document_id)},
+                {"$set": {
+                    "status": "error",
+                    "processing_progress": 0,
+                    "error_message": str(e)
+                }}
+            )
+        except Exception as update_err:
+            # BackgroundTasks silently drops exceptions - if this update itself fails,
+            # the document would otherwise be stuck in "processing" forever with no trace.
+            logger.critical(
+                f"Failed to mark document {document_id} as errored after a processing failure: {update_err}"
+            )
 
 
 @router.post("/", response_model=DocumentOut, status_code=status.HTTP_202_ACCEPTED)
+@limiter.limit("10/minute")
 async def upload_document(
-    background_tasks: BackgroundTasks, 
+    request: Request,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     generate_context: bool = settings.GENERATE_SITUATIONAL_CONTEXT
 ):
     """
     Uploads a PDF document and starts an asynchronous background processing task.
     """
-    if not file.filename.endswith(".pdf"):
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid file format. Only PDF files are supported."
@@ -179,9 +176,21 @@ async def upload_document(
         # Read file bytes in memory
         file_bytes = await file.read()
         file_size = len(file_bytes)
-        
-        # Synchronously extract initial PDF metadata
-        pdf_meta = extract_metadata_from_pdf(file_bytes)
+
+        if file_size > MAX_UPLOAD_SIZE_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"File too large. Maximum allowed size is {settings.MAX_UPLOAD_SIZE_MB}MB."
+            )
+
+        if not file_bytes.startswith(PDF_MAGIC_BYTES):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="File does not appear to be a valid PDF."
+            )
+
+        # Extract initial PDF metadata off the event loop (parsing can be slow for large/malformed files)
+        pdf_meta = await asyncio.to_thread(extract_metadata_from_pdf, file_bytes)
         title = pdf_meta.get("title")
         author = pdf_meta.get("author")
         
@@ -220,11 +229,13 @@ async def upload_document(
             author=author,
             has_context=generate_context
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error initiating upload: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Upload failed: {str(e)}"
+            detail="Upload failed due to an internal error. Please try again."
         )
 
 
@@ -236,7 +247,7 @@ async def list_documents():
     try:
         documents_collection = Database.get_documents_collection()
         cursor = documents_collection.find().sort("uploaded_at", -1)
-        
+
         docs = []
         async for doc in cursor:
             docs.append(DocumentOut(
@@ -258,7 +269,7 @@ async def list_documents():
         logger.error(f"Error listing documents: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch documents: {str(e)}"
+            detail="Failed to fetch documents due to an internal error."
         )
 
 
@@ -267,9 +278,8 @@ async def delete_document(document_id: str):
     """
     Deletes a document metadata and all its associated text chunk embeddings from MongoDB.
     """
+    doc_obj_id = _validate_object_id(document_id)
     try:
-        doc_obj_id = ObjectId(document_id)
-        
         # 1. Delete document metadata
         documents_collection = Database.get_documents_collection()
         delete_doc_result = await documents_collection.delete_one({"_id": doc_obj_id})
@@ -301,7 +311,7 @@ async def delete_document(document_id: str):
         logger.error(f"Error deleting document {document_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to delete document: {str(e)}"
+            detail="Failed to delete document due to an internal error."
         )
 
 
@@ -310,6 +320,9 @@ async def get_document_pdf(document_id: str):
     """
     Serves the raw PDF file from the local uploads directory.
     """
+    # Validating document_id as an ObjectId (24-char hex) rules out any "../" traversal
+    # sequences before it's used to build a filesystem path.
+    _validate_object_id(document_id)
     file_path = os.path.join(UPLOAD_DIR, f"{document_id}.pdf")
     if not os.path.exists(file_path):
         raise HTTPException(
@@ -324,9 +337,10 @@ async def get_document_report(document_id: str):
     """
     Generates a beautifully formatted PDF compliance report and returns it as a download.
     """
+    doc_obj_id = _validate_object_id(document_id)
     try:
         documents_collection = Database.get_documents_collection()
-        doc = await documents_collection.find_one({"_id": ObjectId(document_id)})
+        doc = await documents_collection.find_one({"_id": doc_obj_id})
         if not doc:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -341,13 +355,15 @@ async def get_document_report(document_id: str):
             
         # Compile PDF report using report service
         pdf_buffer = generate_audit_pdf(doc["audit_report"], doc["filename"])
-        
-        # Return StreamingResponse with PDF headers
+
+        # Sanitize the filename before it goes into a response header (blocks header
+        # injection via quotes/CR-LF/non-ASCII characters in the original upload name).
+        safe_filename = re.sub(r'[^\w\-. ]', '_', doc['filename'])
         headers = {
-            "Content-Disposition": f"attachment; filename=LegalEagle_Audit_{doc['filename']}",
+            "Content-Disposition": f'attachment; filename="BREACH_Audit_{safe_filename}"',
             "Access-Control-Expose-Headers": "Content-Disposition"
         }
-        
+
         return StreamingResponse(
             pdf_buffer,
             media_type="application/pdf",
@@ -359,6 +375,6 @@ async def get_document_report(document_id: str):
         logger.error(f"Error compiling audit report PDF: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to generate report PDF: {str(e)}"
+            detail="Failed to generate report PDF due to an internal error."
         )
 

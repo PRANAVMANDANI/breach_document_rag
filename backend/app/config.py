@@ -14,16 +14,14 @@ class Settings(BaseSettings):
     
     # LLM Settings
     LLM_PROVIDER: str = "groq"
-    EMBEDDING_PROVIDER: str = "local"
     GROQ_API_KEY: str = ""
     OPENROUTER_API_KEY: str = ""
     OPENROUTER_MODEL: str = "openrouter/free"
     GENERATE_SITUATIONAL_CONTEXT: bool = False
     
-    # Ollama Settings
+    # Ollama Settings (used only when LLM_PROVIDER=ollama)
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "llama3"
-    OLLAMA_EMBEDDING_MODEL: str = "nomic-embed-text"
     
     # MongoDB Settings
     MONGODB_URI: str = "mongodb://localhost:27017"
@@ -32,6 +30,9 @@ class Settings(BaseSettings):
     
     # Web Search Settings
     TAVILY_API_KEY: str = ""
+
+    # Upload Limits
+    MAX_UPLOAD_SIZE_MB: int = 20
 
 
 
