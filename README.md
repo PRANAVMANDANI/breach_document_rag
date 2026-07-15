@@ -80,9 +80,10 @@ graph TD
 *   **Lucide React**: Vector icon library.
 
 ### **Infra**
-*   **Docker**: Multi-stage Dockerfiles for both services; `docker-compose.yml` for one-command local stacks (backend + frontend + MongoDB).
-*   **GitHub Actions**: CI runs backend tests (pytest), linting (ruff), frontend linting/build, and a Docker build check on every push.
-*   **Render**: Blueprint (`render.yaml`) for one-click cloud deployment.
+*   **GitHub Actions**: CI runs backend tests (pytest), linting (ruff), and frontend linting/build on every push.
+*   **Render**: Blueprint (`render.yaml`) for one-click backend deployment (native Python, no Docker required).
+*   **Vercel**: Zero-config static hosting for the Vite/React frontend.
+*   **Docker** *(optional)*: `backend/Dockerfile`, `frontend/Dockerfile`, and `docker-compose.yml` are included for anyone who wants to containerize this locally, but nothing above depends on them.
 
 ---
 
@@ -93,31 +94,8 @@ graph TD
 *   Node.js 18+
 *   MongoDB (local) or a [MongoDB Atlas](https://www.mongodb.com/cloud/atlas) cluster.
 *   An API key from **Groq** (free tier Llama 3.3 70B), **Tavily**, and optional cloud providers.
-*   [Docker Desktop](https://www.docker.com/products/docker-desktop/) — only needed for the Docker workflow below.
 
-### Option A — Run with Docker (recommended, fastest)
-
-This spins up MongoDB, the FastAPI backend, and the React frontend together with one command — no local Python/Node setup needed.
-
-```bash
-# 1. Configure backend secrets
-cp backend/.env.example backend/.env
-# Edit backend/.env and fill in GROQ_API_KEY / TAVILY_API_KEY
-# (leave MONGODB_URI as-is — docker-compose points it at the mongo container)
-
-# 2. Build and start everything
-docker compose up --build
-
-# → Frontend:  http://localhost:5173
-# → Backend:   http://localhost:8000
-# → Health:    http://localhost:8000/health
-```
-
-Stop the stack with `docker compose down` (add `-v` to also wipe the MongoDB volume).
-
-### Option B — Run natively
-
-**Backend**
+### Backend
 ```bash
 cd backend
 
@@ -141,7 +119,7 @@ python run.py
 # → API running at http://localhost:8000
 ```
 
-**Frontend**
+### Frontend
 ```bash
 cd frontend
 
@@ -174,13 +152,12 @@ The frontend reads `VITE_API_URL` (see `frontend/.env.example`) — the deployed
 
 ## 🧪 Testing & CI
 
-Every push/PR to `main` runs three GitHub Actions jobs (see [`.github/workflows/ci.yml`](.github/workflows/ci.yml)):
+Every push/PR to `main` runs two GitHub Actions jobs (see [`.github/workflows/ci.yml`](.github/workflows/ci.yml)):
 
 | Job | What it checks |
 |---|---|
 | `backend` | `ruff check` + `pytest` (config parsing, route registration, schema validation) |
 | `frontend` | `eslint` + `vite build` |
-| `docker` | Both Dockerfiles actually build |
 
 Run the same checks locally:
 ```bash
@@ -198,18 +175,28 @@ npm run build
 
 ---
 
-## 🚢 Deployment (Render)
+## 🚢 Deployment
 
-The backend deploys as a **Docker web service**; the frontend deploys as a **static site** (Vite bakes `VITE_API_URL` in at build time, so a static build — not a generic runtime container — is the standard, free way to host it on Render). `render.yaml` at the repo root defines both.
+Backend on **Render** (native Python, no Docker), frontend on **Vercel**. Neither requires anything installed locally beyond a browser.
 
+### Backend → Render
 1. Push this repo to GitHub (see below).
-2. In the [Render Dashboard](https://dashboard.render.com/), click **New → Blueprint**, and select this repo. Render reads `render.yaml` and provisions `breach-backend` (Docker) and `breach-frontend` (static site) automatically.
-3. Fill in the secrets Render prompts for on the backend service: `MONGODB_URI` (an [Atlas](https://www.mongodb.com/cloud/atlas) connection string — Render's free tier has no attached database), `GROQ_API_KEY`, `TAVILY_API_KEY`.
-4. Once both services are live, update two values to match their real `.onrender.com` URLs (Render assigns these on first deploy, so this is a one-time fixup):
-   - `breach-backend`'s `CORS_ORIGINS` env var → the frontend's URL
-   - `breach-frontend`'s `VITE_API_URL` env var → the backend's URL + `/api`, then trigger a manual redeploy of the frontend so the new value gets baked into the build.
+2. In the [Render Dashboard](https://dashboard.render.com/), click **New → Blueprint**, and select this repo. Render reads `render.yaml` at the repo root and provisions the `breach-backend` web service automatically (`pip install -r requirements.txt`, then `uvicorn app.main:app`).
+3. Fill in the secrets Render prompts for: `MONGODB_URI` (a free [MongoDB Atlas](https://www.mongodb.com/cloud/atlas) connection string — Render's free tier has no attached database), `GROQ_API_KEY`, `TAVILY_API_KEY`.
+4. Render assigns a URL like `https://breach-backend.onrender.com` on first deploy — note it for the frontend step below.
 
-Want the frontend containerized too? `frontend/Dockerfile` + `nginx.conf.template` are included and used by `docker-compose.yml` for local testing — flip `breach-frontend` in `render.yaml` to `env: docker` with `dockerfilePath: ./frontend/Dockerfile` if you'd rather run it that way (it'll no longer be on Render's free static tier).
+### Frontend → Vercel
+1. In the [Vercel Dashboard](https://vercel.com/new), import the same GitHub repo.
+2. Set **Root Directory** to `frontend` (Vercel auto-detects the Vite framework preset from there).
+3. Add an environment variable: `VITE_API_URL` = `https://<your-render-backend-url>/api`.
+4. Deploy. Vercel assigns a URL like `https://breach.vercel.app`.
+
+### Wire them together
+Both env values reference each other's URLs, which don't exist until first deploy — so this is a one-time fixup once both are live:
+- On Render, update `breach-backend`'s `CORS_ORIGINS` env var to `["https://<your-vercel-url>"]`.
+- On Vercel, double-check `VITE_API_URL` matches the real Render URL, then trigger a redeploy (Vite bakes it in at build time, so a plain env var change alone won't take effect until rebuilt).
+
+`backend/Dockerfile`, `frontend/Dockerfile`, and `docker-compose.yml` are still in the repo if you ever want to containerize this instead — but nothing above requires Docker.
 
 ---
 
