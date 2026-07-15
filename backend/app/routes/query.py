@@ -2,8 +2,10 @@ import json
 import logging
 from bson import ObjectId
 from bson.errors import InvalidId
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
+from app.database import Database
+from app.dependencies import get_session_id
 from app.rate_limiter import limiter
 from app.schemas.query import QueryRequest
 from app.services.vector_service import search_similar_chunks
@@ -14,10 +16,10 @@ router = APIRouter(prefix="/query", tags=["query"])
 
 @router.post("/")
 @limiter.limit("30/minute")
-async def query_document(request: Request, body: QueryRequest):
+async def query_document(request: Request, body: QueryRequest, session_id: str = Depends(get_session_id)):
     """
     Retrieves matching text chunks from MongoDB and streams the LLM response.
-    Returns source citations in the 'X-Sources' header.
+    Returns source citations in the 'X-Sources' header. Scoped to the caller's session.
     """
     if not body.question.strip():
         raise HTTPException(
@@ -27,11 +29,20 @@ async def query_document(request: Request, body: QueryRequest):
 
     if body.document_id:
         try:
-            ObjectId(body.document_id)
+            doc_obj_id = ObjectId(body.document_id)
         except InvalidId:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid document_id format."
+            )
+
+        # Ownership check: a session can only query documents it owns.
+        documents_collection = Database.get_documents_collection()
+        owned_doc = await documents_collection.find_one({"_id": doc_obj_id, "session_id": session_id})
+        if not owned_doc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Document not found."
             )
 
     try:
@@ -40,7 +51,8 @@ async def query_document(request: Request, body: QueryRequest):
         chunks = await search_similar_chunks(
             query_text=body.question,
             limit=20,
-            document_id=body.document_id
+            document_id=body.document_id,
+            session_id=session_id
         )
 
         if not chunks:

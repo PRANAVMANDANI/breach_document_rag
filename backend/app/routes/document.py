@@ -2,14 +2,15 @@ import asyncio
 import logging
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List
 from bson import ObjectId
 from bson.errors import InvalidId
-from fastapi import APIRouter, UploadFile, File, BackgroundTasks, HTTPException, Request, status
+from fastapi import APIRouter, Depends, UploadFile, File, BackgroundTasks, HTTPException, Request, status
 from fastapi.responses import FileResponse, StreamingResponse
 from app.database import Database
 from app.config import settings
+from app.dependencies import get_session_id
 from app.rate_limiter import limiter
 from app.schemas.document import DocumentOut
 from app.services.pdf_service import extract_pages_from_pdf, extract_metadata_from_pdf
@@ -17,6 +18,7 @@ from app.services.llm_service import extract_metadata_from_text, build_chunk_con
 from app.services.vector_service import store_document_chunks
 from app.services.agent_service import run_contract_audit
 from app.services.report_service import generate_audit_pdf
+from app.services.session_service import sweep_orphaned_uploads
 
 
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "uploads")
@@ -40,9 +42,11 @@ def _validate_object_id(document_id: str) -> ObjectId:
         )
 
 async def process_pdf_background(
-    document_id: str, 
-    file_bytes: bytes, 
-    current_title: str = None, 
+    document_id: str,
+    file_bytes: bytes,
+    session_id: str,
+    expires_at: datetime,
+    current_title: str = None,
     current_author: str = None,
     generate_context: bool = False
 ):
@@ -100,7 +104,9 @@ async def process_pdf_background(
             logger.info("Situational chunk context generation is disabled.")
         
         # 3. Generate embeddings and save chunks in MongoDB
-        await store_document_chunks(document_id, chunks, start_progress=80 if generate_context else 0)
+        await store_document_chunks(
+            document_id, chunks, session_id, expires_at, start_progress=80 if generate_context else 0
+        )
         
         # 3b. Run Automated Legal Compliance Audit
         try:
@@ -161,7 +167,8 @@ async def upload_document(
     request: Request,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    generate_context: bool = settings.GENERATE_SITUATIONAL_CONTEXT
+    generate_context: bool = settings.GENERATE_SITUATIONAL_CONTEXT,
+    session_id: str = Depends(get_session_id)
 ):
     """
     Uploads a PDF document and starts an asynchronous background processing task.
@@ -171,6 +178,13 @@ async def upload_document(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid file format. Only PDF files are supported."
         )
+
+    # Best-effort: remove any local PDF files left behind by documents that
+    # MongoDB's TTL index has already expired (TTL can't reach local disk).
+    try:
+        await sweep_orphaned_uploads()
+    except Exception as sweep_err:
+        logger.warning(f"Orphaned upload sweep failed: {sweep_err}")
 
     try:
         # Read file bytes in memory
@@ -195,17 +209,21 @@ async def upload_document(
         author = pdf_meta.get("author")
         
         # Insert initial metadata in MongoDB with 'processing' status
+        uploaded_at = datetime.utcnow()
+        expires_at = uploaded_at + timedelta(hours=settings.SESSION_MAX_AGE_HOURS)
         doc_data = {
             "filename": file.filename,
             "file_size": file_size,
             "status": "processing",
-            "uploaded_at": datetime.utcnow(),
+            "uploaded_at": uploaded_at,
+            "expires_at": expires_at,
+            "session_id": session_id,
             "title": title,
             "author": author,
             "processing_progress": 0,
             "has_context": generate_context
         }
-        
+
         documents_collection = Database.get_documents_collection()
         insert_result = await documents_collection.insert_one(doc_data)
         doc_id = str(insert_result.inserted_id)
@@ -216,7 +234,9 @@ async def upload_document(
             f.write(file_bytes)
 
         # Delegate chunking, embedding generation, and metadata refinement to background task
-        background_tasks.add_task(process_pdf_background, doc_id, file_bytes, title, author, generate_context)
+        background_tasks.add_task(
+            process_pdf_background, doc_id, file_bytes, session_id, expires_at, title, author, generate_context
+        )
 
         return DocumentOut(
             id=doc_id,
@@ -240,13 +260,13 @@ async def upload_document(
 
 
 @router.get("/", response_model=List[DocumentOut])
-async def list_documents():
+async def list_documents(session_id: str = Depends(get_session_id)):
     """
-    Retrieves all uploaded documents, sorted by upload date descending.
+    Retrieves all documents uploaded by the caller's session, sorted by upload date descending.
     """
     try:
         documents_collection = Database.get_documents_collection()
-        cursor = documents_collection.find().sort("uploaded_at", -1)
+        cursor = documents_collection.find({"session_id": session_id}).sort("uploaded_at", -1)
 
         docs = []
         async for doc in cursor:
@@ -274,16 +294,17 @@ async def list_documents():
 
 
 @router.delete("/{document_id}", status_code=status.HTTP_200_OK)
-async def delete_document(document_id: str):
+async def delete_document(document_id: str, session_id: str = Depends(get_session_id)):
     """
     Deletes a document metadata and all its associated text chunk embeddings from MongoDB.
+    Scoped to the caller's session - a session can only delete its own documents.
     """
     doc_obj_id = _validate_object_id(document_id)
     try:
-        # 1. Delete document metadata
+        # 1. Delete document metadata (only if owned by this session)
         documents_collection = Database.get_documents_collection()
-        delete_doc_result = await documents_collection.delete_one({"_id": doc_obj_id})
-        
+        delete_doc_result = await documents_collection.delete_one({"_id": doc_obj_id, "session_id": session_id})
+
         if delete_doc_result.deleted_count == 0:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -316,13 +337,23 @@ async def delete_document(document_id: str):
 
 
 @router.get("/{document_id}/pdf")
-async def get_document_pdf(document_id: str):
+async def get_document_pdf(document_id: str, session_id: str = Depends(get_session_id)):
     """
     Serves the raw PDF file from the local uploads directory.
+    Scoped to the caller's session via sid query param or X-Session-Id header.
     """
     # Validating document_id as an ObjectId (24-char hex) rules out any "../" traversal
     # sequences before it's used to build a filesystem path.
-    _validate_object_id(document_id)
+    doc_obj_id = _validate_object_id(document_id)
+
+    documents_collection = Database.get_documents_collection()
+    doc = await documents_collection.find_one({"_id": doc_obj_id, "session_id": session_id})
+    if not doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found."
+        )
+
     file_path = os.path.join(UPLOAD_DIR, f"{document_id}.pdf")
     if not os.path.exists(file_path):
         raise HTTPException(
@@ -333,20 +364,21 @@ async def get_document_pdf(document_id: str):
 
 
 @router.get("/{document_id}/report")
-async def get_document_report(document_id: str):
+async def get_document_report(document_id: str, session_id: str = Depends(get_session_id)):
     """
     Generates a beautifully formatted PDF compliance report and returns it as a download.
+    Scoped to the caller's session via sid query param or X-Session-Id header.
     """
     doc_obj_id = _validate_object_id(document_id)
     try:
         documents_collection = Database.get_documents_collection()
-        doc = await documents_collection.find_one({"_id": doc_obj_id})
+        doc = await documents_collection.find_one({"_id": doc_obj_id, "session_id": session_id})
         if not doc:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Document not found."
             )
-        
+
         if not doc.get("has_audit") or not doc.get("audit_report"):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

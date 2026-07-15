@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { ShieldCheck, ShieldAlert, Shield, AlertTriangle, Download, ChevronDown, ChevronUp, FileText, ExternalLink, RefreshCw } from 'lucide-react';
+import { apiFetch } from '../session';
 
 export default function AuditDashboard({ document: contractDoc, apiBaseUrl }) {
   const [expandedRiskIdx, setExpandedRiskIdx] = useState(null);
@@ -144,7 +145,7 @@ export default function AuditDashboard({ document: contractDoc, apiBaseUrl }) {
     setDownloading(true);
     setDownloadError(null);
     try {
-      const response = await fetch(`${apiBaseUrl}/documents/${contractDoc.id}/report`);
+      const response = await apiFetch(`${apiBaseUrl}/documents/${contractDoc.id}/report`);
       if (!response.ok) {
         throw new Error("Failed to download report PDF.");
       }

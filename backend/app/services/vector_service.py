@@ -2,7 +2,8 @@ import asyncio
 import logging
 import math
 import re
-from typing import List, Dict, Any
+from datetime import datetime
+from typing import List, Dict, Any, Optional
 from bson import ObjectId
 from app.config import settings
 from app.database import Database
@@ -40,7 +41,13 @@ async def get_embeddings(texts: List[str], is_query: bool = False) -> List[List[
         raise RuntimeError(f"Embedding failed: {str(e)}")
 
 
-async def store_document_chunks(document_id: str, chunks: List[Dict[str, Any]], start_progress: int = 0) -> int:
+async def store_document_chunks(
+    document_id: str,
+    chunks: List[Dict[str, Any]],
+    session_id: str,
+    expires_at: datetime,
+    start_progress: int = 0
+) -> int:
     """
     Generates embeddings in batches of 100 and saves them in MongoDB.
     """
@@ -76,6 +83,8 @@ async def store_document_chunks(document_id: str, chunks: List[Dict[str, Any]], 
         for idx, chunk in enumerate(batch):
             db_chunks.append({
                 "document_id": doc_obj_id,
+                "session_id": session_id,
+                "expires_at": expires_at,
                 "text": chunk["text"],
                 "context": chunk.get("context", ""),
                 "embedding": embeddings[idx],
@@ -122,16 +131,28 @@ def calculate_cosine_similarity(v1: List[float], v2: List[float]) -> float:
     return dot_product / (magnitude_v1 * magnitude_v2)
 
 
-async def search_vector_chunks(query_vector: List[float], limit: int = 20, document_id: str = None) -> List[Dict[str, Any]]:
+async def search_vector_chunks(
+    query_vector: List[float],
+    limit: int = 20,
+    document_id: str = None,
+    session_id: Optional[str] = None
+) -> List[Dict[str, Any]]:
     """
     Retrieves candidate chunks using Vector Search.
     Tries Atlas Vector Search first, falling back to local cosine similarity calculation if Atlas fails.
+    Always scoped to session_id so one session's chunks are never returned to another.
     """
     chunks_collection = Database.get_chunks_collection()
     is_atlas = settings.MONGODB_URI.startswith("mongodb+srv://")
 
     if is_atlas:
         try:
+            atlas_filter = {}
+            if document_id:
+                atlas_filter["document_id"] = ObjectId(document_id)
+            if session_id:
+                atlas_filter["session_id"] = session_id
+
             vector_search_stage = {
                 "index": settings.ATLAS_VECTOR_INDEX,
                 "path": "embedding",
@@ -139,10 +160,8 @@ async def search_vector_chunks(query_vector: List[float], limit: int = 20, docum
                 "numCandidates": 100,
                 "limit": limit
             }
-            if document_id:
-                vector_search_stage["filter"] = {
-                    "document_id": ObjectId(document_id)
-                }
+            if atlas_filter:
+                vector_search_stage["filter"] = atlas_filter
 
             pipeline = [
                 {"$vectorSearch": vector_search_stage},
@@ -180,6 +199,8 @@ async def search_vector_chunks(query_vector: List[float], limit: int = 20, docum
     filter_query = {}
     if document_id:
         filter_query["document_id"] = ObjectId(document_id)
+    if session_id:
+        filter_query["session_id"] = session_id
 
     candidates = []
     cursor = chunks_collection.find(filter_query, {"text": 1, "context": 1, "embedding": 1, "metadata": 1, "document_id": 1})
@@ -206,10 +227,16 @@ async def search_vector_chunks(query_vector: List[float], limit: int = 20, docum
     return scored_results[:limit]
 
 
-async def search_keyword_chunks(query_text: str, limit: int = 20, document_id: str = None) -> List[Dict[str, Any]]:
+async def search_keyword_chunks(
+    query_text: str,
+    limit: int = 20,
+    document_id: str = None,
+    session_id: Optional[str] = None
+) -> List[Dict[str, Any]]:
     """
     Retrieves candidate chunks using Keyword/Lexical Search.
     Tries Atlas Search first. Falls back to standard MongoDB $text search, then regex term matching.
+    Always scoped to session_id so one session's chunks are never returned to another.
     """
     chunks_collection = Database.get_chunks_collection()
     is_atlas = settings.MONGODB_URI.startswith("mongodb+srv://")
@@ -223,20 +250,19 @@ async def search_keyword_chunks(query_text: str, limit: int = 20, document_id: s
                     "path": ["text", "context"]
                 }
             }
-            
+
+            filter_clauses = []
             if document_id:
+                filter_clauses.append({"equals": {"value": ObjectId(document_id), "path": "document_id"}})
+            if session_id:
+                filter_clauses.append({"equals": {"value": session_id, "path": "session_id"}})
+
+            if filter_clauses:
                 search_stage = {
                     "index": settings.ATLAS_SEARCH_INDEX,
                     "compound": {
                         "must": [search_clause],
-                        "filter": [
-                            {
-                                "equals": {
-                                    "value": ObjectId(document_id),
-                                    "path": "document_id"
-                                }
-                            }
-                        ]
+                        "filter": filter_clauses
                     }
                 }
             else:
@@ -286,9 +312,15 @@ async def search_keyword_chunks(query_text: str, limit: int = 20, document_id: s
                 pipeline_fallback = [
                     {"$search": search_stage_simple}
                 ]
+                match_filter = {}
                 if document_id:
-                    pipeline_fallback.append({"$match": {"document_id": ObjectId(document_id)}})
-                
+                    match_filter["document_id"] = ObjectId(document_id)
+                if session_id:
+                    match_filter["session_id"] = session_id
+                if match_filter:
+                    pipeline_fallback.append({"$match": match_filter})
+
+
                 pipeline_fallback.extend([
                     {
                         "$project": {
@@ -325,6 +357,8 @@ async def search_keyword_chunks(query_text: str, limit: int = 20, document_id: s
         query_filter = {}
         if document_id:
             query_filter["document_id"] = ObjectId(document_id)
+        if session_id:
+            query_filter["session_id"] = session_id
         query_filter["$text"] = {"$search": query_text}
 
         cursor = chunks_collection.find(
@@ -367,7 +401,9 @@ async def search_keyword_chunks(query_text: str, limit: int = 20, document_id: s
         query_filter = {}
         if document_id:
             query_filter["document_id"] = ObjectId(document_id)
-        
+        if session_id:
+            query_filter["session_id"] = session_id
+
         query_filter["$or"] = [
             {"text": {"$regex": regex_pattern, "$options": "i"}},
             {"context": {"$regex": regex_pattern, "$options": "i"}}
@@ -442,10 +478,15 @@ def reciprocal_rank_fusion(
     return combined
 
 
-async def search_similar_chunks(query_text: str, limit: int = 4, document_id: str = None) -> List[Dict[str, Any]]:
+async def search_similar_chunks(
+    query_text: str,
+    limit: int = 4,
+    document_id: str = None,
+    session_id: Optional[str] = None
+) -> List[Dict[str, Any]]:
     """
     Performs a hybrid search combining Vector Search and Atlas Search (keyword)
-    using Reciprocal Rank Fusion (RRF).
+    using Reciprocal Rank Fusion (RRF). Always scoped to session_id.
     """
     # 1. Generate query embedding
     query_embeddings = await get_embeddings([query_text], is_query=True)
@@ -457,8 +498,8 @@ async def search_similar_chunks(query_text: str, limit: int = 4, document_id: st
     candidate_limit = max(limit * 2, 40)
 
     # 2. Run searches in parallel
-    vector_task = search_vector_chunks(query_vector, limit=candidate_limit, document_id=document_id)
-    keyword_task = search_keyword_chunks(query_text, limit=candidate_limit, document_id=document_id)
+    vector_task = search_vector_chunks(query_vector, limit=candidate_limit, document_id=document_id, session_id=session_id)
+    keyword_task = search_keyword_chunks(query_text, limit=candidate_limit, document_id=document_id, session_id=session_id)
 
     vector_results, keyword_results = await asyncio.gather(vector_task, keyword_task)
 

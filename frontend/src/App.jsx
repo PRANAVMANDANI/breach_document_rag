@@ -5,6 +5,7 @@ import DocumentList from './components/DocumentList';
 import ChatInterface from './components/ChatInterface';
 import AuditDashboard from './components/AuditDashboard';
 import { Shield, Bot } from 'lucide-react';
+import { apiFetch } from './session';
 
 
 // Backend endpoint configuration. Standard dev is localhost:8000/api
@@ -66,7 +67,7 @@ export default function App() {
     // and overwriting fresher state with stale data.
     const requestId = ++fetchRequestIdRef.current;
     try {
-      const response = await fetch(`${API_BASE_URL}/documents/`);
+      const response = await apiFetch(`${API_BASE_URL}/documents/`);
       if (requestId !== fetchRequestIdRef.current) return;
 
       if (response.ok) {

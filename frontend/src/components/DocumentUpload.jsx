@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { UploadCloud, AlertCircle, CheckCircle, FileText, Loader2 } from 'lucide-react';
+import { apiFetch } from '../session';
 
 export default function DocumentUpload({ apiBaseUrl, onUploadSuccess, documents = [] }) {
   const [dragActive, setDragActive] = useState(false);
@@ -80,7 +81,7 @@ export default function DocumentUpload({ apiBaseUrl, onUploadSuccess, documents 
     formData.append("file", file);
 
     try {
-      const response = await fetch(`${apiBaseUrl}/documents/?generate_context=${useContextualRetrieval}`, {
+      const response = await apiFetch(`${apiBaseUrl}/documents/?generate_context=${useContextualRetrieval}`, {
         method: "POST",
         body: formData,
       });

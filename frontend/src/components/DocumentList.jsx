@@ -1,5 +1,6 @@
 import React from 'react';
 import { Trash2, FileText, CheckCircle2, AlertCircle, Loader2, Sparkles } from 'lucide-react';
+import { apiFetch } from '../session';
 
 export default function DocumentList({
   documents,
@@ -44,7 +45,7 @@ export default function DocumentList({
     e.stopPropagation();
     setConfirmDeleteId(null);
     try {
-      const response = await fetch(`${apiBaseUrl}/documents/${id}`, {
+      const response = await apiFetch(`${apiBaseUrl}/documents/${id}`, {
         method: "DELETE"
       });
       if (response.ok) {

@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { Send, Bot, User, Loader2, BookOpen, X, Trash2 } from 'lucide-react';
+import { apiFetch, withSid } from '../session';
 
 export default function ChatInterface({ apiBaseUrl, selectedDocId, documents }) {
   const [chats, setChats] = useState({});
@@ -97,7 +98,7 @@ export default function ChatInterface({ apiBaseUrl, selectedDocId, documents }) 
     setMessages(prev => [...prev, { sender: 'bot', text: "", sources: [], streaming: true }]);
 
     try {
-      const response = await fetch(`${apiBaseUrl}/query/`, {
+      const response = await apiFetch(`${apiBaseUrl}/query/`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -357,7 +358,7 @@ export default function ChatInterface({ apiBaseUrl, selectedDocId, documents }) 
             <div className="flex-1 bg-claude-sidebar overflow-hidden relative transition-colors duration-300">
               <iframe
                 key={`${selectedSourceText.document_id}-${selectedSourceText.page_number}`} // Force iframe reload when page/doc changes
-                src={`${apiBaseUrl}/documents/${selectedSourceText.document_id}/pdf#page=${selectedSourceText.page_number}`}
+                src={`${withSid(`${apiBaseUrl}/documents/${selectedSourceText.document_id}/pdf`)}#page=${selectedSourceText.page_number}`}
                 className="w-full h-full border-0 bg-claude-sidebar"
                 title="Document PDF Viewer"
                 sandbox="allow-same-origin"

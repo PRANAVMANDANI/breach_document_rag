@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     # Upload Limits
     MAX_UPLOAD_SIZE_MB: int = 20
 
+    # Anonymous session isolation: each visitor's documents/chunks are tagged
+    # with a per-browser-tab session id and hard-expire after this many hours.
+    SESSION_MAX_AGE_HOURS: int = 5
+
 
 
     # Configuration for loading from .env
